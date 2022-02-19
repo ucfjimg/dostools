@@ -1,45 +1,41 @@
 mod args;
 
-use std::fs::File;
-use std::io::Read;
-
 use dt_lib::error::Error as AppError;
-use dt_lib::record;
-use dt_lib::unpack;
+use dt_lib::record::{Record, RecordType};
+use dt_lib::objfile::*;
+
 use crate::args::Args;
+
+fn theadr(rec: &Record) -> Result<(), AppError> {
+    let rec = OmfTheadr::new(rec)?;
+    println!("THEADR {}", rec.name);
+    Ok(())
+}
+
+fn do_record(rec: &Record) -> Result<(), AppError> {
+    match rec.rectype {
+        RecordType::THeader => theadr(rec),
+        RecordType::Unknown{ typ } => Err(AppError::new(&format!("skipping unrecognized record {:02x}", typ))),
+        _ => {
+            println!("not yet supported {:?}", rec.rectype);
+            Ok(())
+        },
+    }
+}
 
 fn objdump() -> Result<(), AppError> {
     let args = Args::parse()?;
-    let mut file = File::open(args.libname)?;
-
-    let mut buf = [0u8; 3];
+    let mut obj = ObjFile::read(&args.libname)?;
 
     loop {
-        let size = file.read(&mut buf)?;
-        if size == 0 {
-            break;
-        }
-
-        if size < buf.len() {
-            return Err(AppError::truncated());
-        }
-
-        let bytes = unpack::uint(&buf[1..3]);
-
-        let mut data = Vec::new();
-        data.resize(bytes, 0u8);
-
-        let size = file.read(&mut data)?;
-        if size < data.len() {
-            return Err(AppError::truncated());
-        }
-
-        match record::RecordType::try_from(buf[0]) {
-            Ok(rectype) => println!("{:?}", rectype),
-            Err(_) => println!("unknown record type {:02x}", buf[0]),
+        match obj.next()? {
+            Some(rec) => 
+                if let Err(e) = do_record(&rec) {
+                    println!("parsing error {}", e);
+                },
+            None => break,
         }
     }
-
     Ok(())
 } 
 
