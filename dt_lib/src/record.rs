@@ -1,4 +1,5 @@
 use crate::error::Error as MyError;
+use crate::unpack;
 use std::str;
 
 // record types
@@ -121,17 +122,12 @@ impl<'a> RecordParser<'a> {
     //
     pub fn next_uint(&mut self, is32: bool) -> Result<u32, MyError> {
         let bytes: usize = if is32 { 4 } else { 2 };
-        let mut value: u32 = 0;
-
+        
         if self.next + bytes > self.rec.data.len() {
             return Err(MyError::truncated());
         }
 
-        for i in 1..bytes+1 {
-            let byte = self.rec.data[self.next + bytes - i] as u32;
-            value = (value << 8) | byte;
-        }
-
+        let value = unpack::uint(&self.rec.data[self.next..self.next+bytes]) as u32;
         self.next += bytes;
 
         Ok(value)

@@ -5,19 +5,8 @@ use std::io::Read;
 
 use dt_lib::error::Error as AppError;
 use dt_lib::record;
+use dt_lib::unpack;
 use crate::args::Args;
-
-fn uint(data: &[u8]) -> usize {
-    let bytes = data.len();
-    let mut value: usize = 0;
-
-    for i in 1..bytes+1 {
-        let byte = data[bytes - i] as usize;
-        value = (value << 8) | byte;
-    }
-
-    value
-}
 
 fn objdump() -> Result<(), AppError> {
     let args = Args::parse()?;
@@ -35,7 +24,7 @@ fn objdump() -> Result<(), AppError> {
             return Err(AppError::truncated());
         }
 
-        let bytes = uint(&buf[1..3]);
+        let bytes = unpack::uint(&buf[1..3]);
 
         let mut data = Vec::new();
         data.resize(bytes, 0u8);
