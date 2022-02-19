@@ -9,6 +9,7 @@ use crate::args::Args;
 struct Objdump {
     lnames: Vec<String>,
     segments: Vec<OmfSegment>,
+    externs: Vec<String>,
 }
 
 impl Objdump {
@@ -16,6 +17,7 @@ impl Objdump {
         Objdump {
             lnames: vec!["".to_string()],
             segments: vec![OmfSegment::empty()],
+            externs: vec!["".to_string()],
         }
     }
 
@@ -79,12 +81,42 @@ impl Objdump {
         Ok(())
     }
 
+    fn grpdef(&self, rec: &Record) -> Result<(), AppError> {
+        let rec = OmfGrpdef::new(rec)?;
+
+        println!("GRPDEF {}", self.lname(rec.name));
+
+        for segidx in rec.segs.iter() {
+            let seg = &self.segments[*segidx];
+            println!("      {}.{}.{}", 
+                self.lname(seg.class),
+                self.lname(seg.name),
+                self.lname(seg.overlay)
+            );
+        }
+        Ok(())
+    }
+
+    fn extdef(&mut self, rec: &Record) -> Result<(), AppError> {
+        let rec = OmfExtdef::new(rec)?;
+
+        println!("EXTDEF");
+        for ext in rec.externs.iter() {
+            println!("{:5} {}", self.externs.len(), ext.name);
+            self.externs.push(ext.name.clone());
+        }
+        
+        Ok(())
+    }
+
     fn do_record(&mut self, rec: &Record) -> Result<(), AppError> {
         match rec.rectype {
             RecordType::THeader => self.theadr(rec),
             RecordType::LNames => self.lnames(rec),
             RecordType::SegDef | 
             RecordType::SegDef32 => self.segdef(rec),
+            RecordType::GrpDef => self.grpdef(rec),
+            RecordType::ExtDef => self.extdef(rec),
             RecordType::Unknown{ typ } => Err(AppError::new(&format!("skipping unrecognized record {:02x}", typ))),
             _ => {
                 println!("not yet supported {:?}", rec.rectype);
