@@ -2,6 +2,8 @@ use std::error;
 use std::fmt;
 use std::io;
 
+use crate::record::RecordType;
+
 #[derive(Debug)]
 pub struct Error {
     pub details: String,
@@ -29,6 +31,18 @@ impl Error {
     pub fn truncated() -> Error {
         Error{
             details: "record is truncated".to_string(),
+        }
+    }
+
+    pub fn bad_rectype(rectype: RecordType, parser: &str) -> Error {
+        Error {
+            details: format!("invalid record type {:?} for {}", rectype, parser),
+        }
+    }
+
+    pub fn bad_comclass(comclass: u8, parser: &str) -> Error {
+        Error {
+            details: format!("invalid comment class ${:02x} for {}", comclass, parser),
         }
     }
 }

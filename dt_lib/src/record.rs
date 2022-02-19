@@ -9,46 +9,69 @@ use std::str;
 #[derive(Debug)]
 #[derive(PartialEq)]
 pub enum RecordType {
-    THeader = 0x80,
-    Comment = 0x88,
-    ExtDef = 0x8c,
-    ModEnd = 0x8a,
-    ModEnd32 = 0x8b,
-    PubDef = 0x90,
-    PubDef32 = 0x91,
-    LNames = 0x96,
-    SegDef = 0x98,
-    SegDef32 = 0x99,
-    GrpDef = 0x9a,
-    LExtDef = 0xb4,
-    LExtDef32 = 0xb5,
+    THeader,
+    Comment,
+    ExtDef,
+    ModEnd,
+    ModEnd32,
+    PubDef,
+    PubDef32,
+    LNames,
+    SegDef,
+    SegDef32,
+    GrpDef,
+    LExtDef,
+    LExtDef32,
+    Unknown{ typ: u8 },
 }
 
 impl RecordType {
     pub fn is32(self) -> bool {
-        ((self as u8) & 0x01) != 0
+        self == RecordType::ModEnd32 || 
+        self == RecordType::PubDef32 || 
+        self == RecordType::SegDef32 || 
+        self == RecordType::LExtDef32
     }
 }
 
-impl TryFrom<u8> for RecordType {
-    type Error = MyError;
-
-    fn try_from(v: u8) -> Result<Self, Self::Error> {
+impl From<u8> for RecordType {
+    fn from(v: u8) -> Self {
         match v {
-            x if x == RecordType::THeader as u8 => Ok(RecordType::THeader),
-            x if x == RecordType::Comment as u8 => Ok(RecordType::Comment),
-            x if x == RecordType::ExtDef as u8 => Ok(RecordType::ExtDef),
-            x if x == RecordType::ModEnd as u8 => Ok(RecordType::ModEnd),
-            x if x == RecordType::ModEnd32 as u8 => Ok(RecordType::ModEnd32),
-            x if x == RecordType::PubDef as u8 => Ok(RecordType::PubDef),
-            x if x == RecordType::PubDef32 as u8 => Ok(RecordType::PubDef32),
-            x if x == RecordType::LNames as u8 => Ok(RecordType::LNames),
-            x if x == RecordType::SegDef as u8 => Ok(RecordType::SegDef),
-            x if x == RecordType::SegDef32 as u8 => Ok(RecordType::SegDef32),
-            x if x == RecordType::GrpDef as u8 => Ok(RecordType::GrpDef),
-            x if x == RecordType::LExtDef as u8 => Ok(RecordType::LExtDef),
-            x if x == RecordType::LExtDef32 as u8 => Ok(RecordType::LExtDef32),
-            _ => Err(MyError::new(&format!("invalid record type ${:02x}", v)))
+            0x80 => RecordType::THeader,
+            0x88 => RecordType::Comment,
+            0x8c => RecordType::ExtDef,
+            0x8a => RecordType::ModEnd,
+            0x8b => RecordType::ModEnd32,
+            0x90 => RecordType::PubDef,
+            0x91 => RecordType::PubDef32,
+            0x96 => RecordType::LNames,
+            0x98 => RecordType::SegDef,
+            0x99 => RecordType::SegDef32,
+            0x9a => RecordType::GrpDef,
+            0xb4 => RecordType::LExtDef,
+            0xb5 => RecordType::LExtDef32,
+            x => RecordType::Unknown{ typ: x },
+        }
+    }
+}
+
+impl From<RecordType> for u8 {
+    fn from(rec: RecordType) -> Self {
+        match rec {
+            RecordType::THeader => 0x80,
+            RecordType::Comment => 0x88,
+            RecordType::ExtDef => 0x8c,
+            RecordType::ModEnd => 0x8a,
+            RecordType::ModEnd32 => 0x8b,
+            RecordType::PubDef => 0x90,
+            RecordType::PubDef32 => 0x91,
+            RecordType::LNames => 0x96,
+            RecordType::SegDef => 0x98,
+            RecordType::SegDef32 => 0x99,
+            RecordType::GrpDef => 0x9a,
+            RecordType::LExtDef => 0xb4,
+            RecordType::LExtDef32 => 0xb5,
+            RecordType::Unknown{typ} => typ,
         }
     }
 }
@@ -57,7 +80,7 @@ impl TryFrom<u8> for RecordType {
 //
 #[derive(Debug)]
 pub struct Record<'a> {
-    pub rectype: Option<RecordType>,
+    pub rectype: RecordType,
     pub data: &'a [u8],
 }
 
@@ -200,7 +223,7 @@ mod tests {
     #[test]
     fn test_end_succeeds_on_empty_data() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![],
         };
 
@@ -211,7 +234,7 @@ mod tests {
     #[test]
     fn test_end_succeeds_on_data_left() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0xfe],
         };
 
@@ -222,7 +245,7 @@ mod tests {
     #[test]
     fn test_next_str_succeeds() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![3, 0x41, 0x42, 0x43],
         };
 
@@ -233,7 +256,7 @@ mod tests {
     #[test]
     fn test_next_str_fails_on_empty() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![],
         };
 
@@ -244,7 +267,7 @@ mod tests {
     #[test]
     fn test_next_str_leaves_valid_state() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![3, 0x41, 0x42, 0x43, 0xfe],
         };
 
@@ -256,7 +279,7 @@ mod tests {
     #[test]
     fn test_next_str_fails_on_bounds() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0x03, 0x41, 0x42],
         };
 
@@ -267,7 +290,7 @@ mod tests {
     #[test]
     fn test_next_uint_32_succeeds() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0x55, 0xaa, 0x34, 0x12],
         };
 
@@ -278,7 +301,7 @@ mod tests {
     #[test]
     fn test_next_uint_32_fails_on_bounds() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0x55, 0xaa, 0x34],
         };
 
@@ -289,7 +312,7 @@ mod tests {
     #[test]
     fn test_next_uint_32_leaves_valid_state() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0x55, 0xaa, 0x34, 0x12, 0x03],
         };
 
@@ -301,7 +324,7 @@ mod tests {
     #[test]
     fn test_next_uint_16_succeeds() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0x55, 0xaa],
         };
 
@@ -312,7 +335,7 @@ mod tests {
     #[test]
     fn test_next_uint_16_fails_on_bounds() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0x55],
         };
 
@@ -323,7 +346,7 @@ mod tests {
     #[test]
     fn test_next_uint_16_leaves_valid_state() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0x55, 0xaa, 0x03],
         };
 
@@ -335,7 +358,7 @@ mod tests {
     #[test]
     fn test_next_small_index_succeeds() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0x03],
         };
 
@@ -346,7 +369,7 @@ mod tests {
     #[test]
     fn test_next_small_index_fails_on_bounds() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![],
         };
 
@@ -357,7 +380,7 @@ mod tests {
     #[test]
     fn test_next_small_index_leaves_valid_state() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0x03, 0x04],
         };
 
@@ -372,7 +395,7 @@ mod tests {
         // then index = (first_byte & 0x7f) * 0x100 + second_byte
         //
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0x81, 0x02],
         };
 
@@ -383,7 +406,7 @@ mod tests {
     #[test]
     fn test_next_large_index_fails_on_bounds() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0x80],
         };
 
@@ -394,7 +417,7 @@ mod tests {
     #[test]
     fn test_next_large_index_leaves_valid_state() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0x81, 0x02, 0x04],
         };
 
@@ -406,7 +429,7 @@ mod tests {
     #[test]
     fn test_next_rest_str_succeeds() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0x41, 0x42, 0x43],
         };
 
@@ -417,7 +440,7 @@ mod tests {
     #[test]
     fn test_next_rest_str_succeeds_on_empty_string() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![],
         };
 
@@ -428,7 +451,7 @@ mod tests {
     #[test]
     fn test_next_rest_str_leaves_valid_state() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0x41, 0x42, 0x43],
         };
 
@@ -441,7 +464,7 @@ mod tests {
     #[test]
     fn test_next_byte_succeeds() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0xfe],
         };
 
@@ -452,7 +475,7 @@ mod tests {
     #[test]
     fn test_next_byte_fails_at_end() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0xfe],
         };
 
@@ -464,7 +487,7 @@ mod tests {
     #[test]
     fn test_next_byte_leaves_valid_state() {
         let rec = Record{
-            rectype: None,
+            rectype: RecordType::Unknown{ typ: 0 },
             data: &vec![0xfe, 0x03],
         };
 
