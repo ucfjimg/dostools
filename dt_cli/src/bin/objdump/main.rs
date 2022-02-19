@@ -109,6 +109,48 @@ impl Objdump {
         Ok(())
     }
 
+    fn pubdef(&self, rec: &Record) -> Result<(), AppError> {
+        let is32 = rec.rectype.is32();
+        let rec = OmfPubdef::new(rec)?;
+
+        print!("{}",
+            if is32 { "PUBDEF32"} else { "PUBDEF" }
+        );
+
+        if let Some(group) = rec.base_group {
+            print!(" GRP={}", self.lname(group));
+        }
+
+        if let Some(seg) = rec.base_seg {
+            let seg = &self.segments[seg];
+            print!(" SEG={}.{}.{}", 
+                self.lname(seg.class),
+                self.lname(seg.name),
+                self.lname(seg.overlay)
+            );
+        }
+
+        if let Some(frame) = rec.base_frame {
+            print!(" FRAME=${:04x}", frame);
+        }
+
+        println!();
+
+        for public in rec.publics.iter() {
+            println!("      {:08x} {}", public.offset, public.name);
+        }
+
+        Ok(())
+    }
+
+    fn modend(&self, rec: &Record) -> Result<(), AppError> {
+        let rec = OmfModend::new(rec)?;
+
+        println!("MODEND");
+
+        Ok(())
+    }
+
     fn do_record(&mut self, rec: &Record) -> Result<(), AppError> {
         match rec.rectype {
             RecordType::THeader => self.theadr(rec),
@@ -117,6 +159,9 @@ impl Objdump {
             RecordType::SegDef32 => self.segdef(rec),
             RecordType::GrpDef => self.grpdef(rec),
             RecordType::ExtDef => self.extdef(rec),
+            RecordType::PubDef | 
+            RecordType::PubDef32 => self.pubdef(rec),
+            RecordType::ModEnd => self.modend(rec),
             RecordType::Unknown{ typ } => Err(AppError::new(&format!("skipping unrecognized record {:02x}", typ))),
             _ => {
                 println!("not yet supported {:?}", rec.rectype);
