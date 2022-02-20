@@ -16,14 +16,11 @@ use std::io;
 use std::str;
 
 use crate::error::Error as OmfError;
+use crate::record::CommentClass;
 use crate::record::RecordType;
 use crate::record::Record;
 use crate::record::RecordParser;
 
-
-// comment subtypes
-//
-pub const COMENT_LIB: u8 = 0x9f;
 
 // aligments ('A' field of segdef acbp)
 //
@@ -408,16 +405,16 @@ impl OmfModend {
 //
 pub struct Coment {
     pub comtype: u8,
-    pub class: u8,
+    pub class: CommentClass,
 }
 
 impl Coment {
     // Parse a comment record header, which is just the
     // first two bytes.
     //
-    fn new(parser: &mut RecordParser) -> Result<Coment, OmfError> {
+    pub fn new(parser: &mut RecordParser) -> Result<Coment, OmfError> {
         let comtype = parser.next_byte()?;
-        let class = parser.next_byte()?;
+        let class = parser.next_byte()?.into();
 
         Ok(Coment{
             comtype: comtype,
@@ -429,22 +426,13 @@ impl Coment {
     // The module user must use this to determine the appropriate
     // coment parser to use.
     //
-    // ```
-    // if rec.rectype == COMENT {
-    //     let class = Coment::comclass(rec)?;
-    //     if class == COMENT_LIB {
-    //         let lib = OmfComentLib::new(rec)?;
-    //         // use lib
-    //     }
-    // ```
-    //
-    pub fn comclass(rec: &Record) -> Result<u8, OmfError> {
+    pub fn comclass(rec: &Record) -> Result<CommentClass, OmfError> {
         check_rectype(rec, RecordType::Comment, "COMENT")?;
 
         if rec.data.len() < 2 {
             Err(OmfError::truncated())
         } else {
-            Ok(rec.data[1])
+            Ok(rec.data[1].into())
         }
     }
 }
@@ -464,8 +452,7 @@ impl OmfComentLib {
         let mut parser = RecordParser::new(&rec);
 
         let com = Coment::new(&mut parser)?;
-
-        if com.class != COMENT_LIB {
+        if com.class != CommentClass::DefaultLibrary {
             println!("{:?}", rec);
             return Err(OmfError::bad_comclass(com.class, "COMENT_LIB"))
         }

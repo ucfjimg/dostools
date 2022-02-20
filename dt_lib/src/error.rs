@@ -2,7 +2,7 @@ use std::error;
 use std::fmt;
 use std::io;
 
-use crate::record::RecordType;
+use crate::record::{CommentClass,RecordType};
 
 #[derive(Debug)]
 pub struct Error {
@@ -40,9 +40,9 @@ impl Error {
         }
     }
 
-    pub fn bad_comclass(comclass: u8, parser: &str) -> Error {
+    pub fn bad_comclass(comclass: CommentClass, parser: &str) -> Error {
         Error {
-            details: format!("invalid comment class ${:02x} for {}", comclass, parser),
+            details: format!("invalid comment class {:?} for {}", comclass, parser),
         }
     }
 }

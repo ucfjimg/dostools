@@ -1,7 +1,7 @@
 mod args;
 
 use dt_lib::error::Error as AppError;
-use dt_lib::record::{Record, RecordType};
+use dt_lib::record::{Record, RecordType, CommentClass};
 use dt_lib::objfile::*;
 
 use crate::args::Args;
@@ -144,9 +144,29 @@ impl Objdump {
     }
 
     fn modend(&self, rec: &Record) -> Result<(), AppError> {
-        let rec = OmfModend::new(rec)?;
+        let _rec = OmfModend::new(rec)?;
 
         println!("MODEND");
+
+        Ok(())
+    }
+
+    fn coment_lib(&self, rec: &Record) -> Result<(), AppError> {
+        let lib = OmfComentLib::new(rec)?;
+
+        println!("COMENT LIBMOD {}", lib.path);
+
+        Ok(())
+    }
+
+    fn coment(&self, rec: &Record) -> Result<(), AppError> {
+        match Coment::comclass(rec)? {
+            CommentClass::DefaultLibrary => self.coment_lib(rec)?,
+            CommentClass::Unknown{typ} => {
+                println!("COMENT unknown {:02x}", typ);
+            },
+            comclass => println!("COMENT unknown class {:?}", comclass),
+        } 
 
         Ok(())
     }
@@ -162,6 +182,7 @@ impl Objdump {
             RecordType::PubDef | 
             RecordType::PubDef32 => self.pubdef(rec),
             RecordType::ModEnd => self.modend(rec),
+            RecordType::Comment => self.coment(rec),
             RecordType::Unknown{ typ } => Err(AppError::new(&format!("skipping unrecognized record {:02x}", typ))),
             _ => {
                 println!("not yet supported {:?}", rec.rectype);
