@@ -79,6 +79,9 @@ impl From<RecordType> for u8 {
 #[derive(Debug)]
 #[derive(PartialEq)]
 pub enum CommentClass {
+    DosVersion,
+    MemoryModel,
+    DosSeg,
     DefaultLibrary,
     Unknown{ typ: u8 },
 }
@@ -86,6 +89,9 @@ pub enum CommentClass {
 impl From<u8> for CommentClass {
     fn from(v: u8) -> Self {
         match v {
+            0x9c => CommentClass::DosVersion,
+            0x9d => CommentClass::MemoryModel,
+            0x9e => CommentClass::DosSeg,
             0x9f => CommentClass::DefaultLibrary,
             x => CommentClass::Unknown{ typ: x },
         }
@@ -95,6 +101,9 @@ impl From<u8> for CommentClass {
 impl From<CommentClass> for u8 {
     fn from(rec: CommentClass) -> Self {
         match rec {
+            CommentClass::DosVersion => 0x9c,
+            CommentClass::MemoryModel => 0x9d,
+            CommentClass::DosSeg => 0x9e,
             CommentClass::DefaultLibrary => 0x9f,
             CommentClass::Unknown{typ} => typ,
         }

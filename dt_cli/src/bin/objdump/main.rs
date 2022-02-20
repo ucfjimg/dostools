@@ -151,6 +151,14 @@ impl Objdump {
         Ok(())
     }
 
+    fn coment_memory_model(&self, rec: &Record) -> Result<(), AppError> {
+        let lib = OmfComentMemoryModel::new(rec)?;
+
+        println!("COMENT MEMORY MODEL {}", lib.model);
+
+        Ok(())
+    }
+
     fn coment_lib(&self, rec: &Record) -> Result<(), AppError> {
         let lib = OmfComentLib::new(rec)?;
 
@@ -159,13 +167,24 @@ impl Objdump {
         Ok(())
     }
 
+    fn coment_dosver(&self, rec: &Record) -> Result<(), AppError> {
+        let ver = OmfComentDosVersion::new(rec)?;
+
+        println!("COMENT DOSVER {}", ver.version);
+
+        Ok(())
+    }
+
+
     fn coment(&self, rec: &Record) -> Result<(), AppError> {
         match Coment::comclass(rec)? {
+            CommentClass::DosVersion => self.coment_dosver(rec)?,
+            CommentClass::MemoryModel => self.coment_memory_model(rec)?,
+            CommentClass::DosSeg => println!("COMENT DOSSEG"),
             CommentClass::DefaultLibrary => self.coment_lib(rec)?,
             CommentClass::Unknown{typ} => {
                 println!("COMENT unknown {:02x}", typ);
             },
-            comclass => println!("COMENT unknown class {:?}", comclass),
         } 
 
         Ok(())

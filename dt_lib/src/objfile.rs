@@ -437,12 +437,77 @@ impl Coment {
     }
 }
 
+// A COMENT record which specifies the memory model.
+//
+pub struct OmfComentMemoryModel {
+    pub com: Coment,
+    pub model: String,
+}
+
+impl OmfComentMemoryModel {
+    // Parse a COMENT library specification.
+    //
+    pub fn new(rec: &Record) -> Result<OmfComentMemoryModel, OmfError> {
+        check_rectype(rec, RecordType::Comment, "COMENT")?;
+        let mut parser = RecordParser::new(&rec);
+
+        let com = Coment::new(&mut parser)?;
+        if com.class != CommentClass::MemoryModel {
+            println!("{:?}", rec);
+            return Err(OmfError::bad_comclass(com.class, "COMENT_MEMORY_MODEL"))
+        }
+
+        let model = parser.rest_str()?;
+        if model.len() == 0 {
+            return Err(OmfError::truncated());
+        }
+        
+        Ok(OmfComentMemoryModel{
+            com: com,
+            model: model,
+        })
+    }
+}
+
+// A COMENT record which specifies the DOS version (deprecated).
+//
+pub struct OmfComentDosVersion {
+    pub com: Coment,
+    pub version: String,
+}
+
+impl OmfComentDosVersion {
+    // Parse a COMENT library specification.
+    //
+    pub fn new(rec: &Record) -> Result<OmfComentDosVersion, OmfError> {
+        check_rectype(rec, RecordType::Comment, "COMENT")?;
+        let mut parser = RecordParser::new(&rec);
+
+        let com = Coment::new(&mut parser)?;
+        if com.class != CommentClass::DosVersion {
+            println!("{:?}", rec);
+            return Err(OmfError::bad_comclass(com.class, "COMENT_DOS_VERSION"))
+        }
+
+        let version = parser.rest_str()?;
+        if version.len() == 0 {
+            return Err(OmfError::truncated());
+        }
+        
+        Ok(OmfComentDosVersion{
+            com: com,
+            version: version,
+        })
+    }
+}
+
 // A COMENT record which specifies a library to link.
 //
 pub struct OmfComentLib {
     pub com: Coment,
     pub path: String,
 }
+
 
 impl OmfComentLib {
     // Parse a COMENT library specification.
@@ -855,7 +920,7 @@ mod omfrec_tests {
 
         if let Ok(coment) = Coment::new(&mut parser) {
             assert_eq!(coment.comtype, 0x80);
-            assert_eq!(coment.class, 0x30);
+            assert_eq!(coment.class, CommentClass::Unknown{ typ: 0x30 });
         } else {
             assert!(false, "parse of valid COMENT failed");
         }
@@ -884,7 +949,7 @@ mod omfrec_tests {
 
         if let Ok(lib) = OmfComentLib::new(&rec) {
             assert_eq!(lib.com.comtype, 0x80);
-            assert_eq!(lib.com.class, 0x9f);
+            assert_eq!(lib.com.class, CommentClass::DefaultLibrary);
             assert_eq!(lib.path, "ABC".to_string());
         } else {
             assert!(false, "parsing valid COMENT LIB failed");
@@ -900,6 +965,62 @@ mod omfrec_tests {
 
         if let Ok(_) = OmfComentLib::new(&rec) {
             assert!(false, "parsing truncated COMENT LIB succeeded");
+        } 
+    }
+
+    #[test]
+    fn test_parse_coment_memory_model_succeeds() {
+        let rec = Record{
+            rectype: RecordType::Comment,
+            data: &vec![0x80, 0x9d, 0x33, 0x4f, 0x73],
+        };
+
+        if let Ok(lib) = OmfComentMemoryModel::new(&rec) {
+            assert_eq!(lib.com.comtype, 0x80);
+            assert_eq!(lib.com.class, CommentClass::MemoryModel);
+            assert_eq!(lib.model, "3Os".to_string());
+        } else {
+            assert!(false, "parsing valid COMENT memory model failed");
+        }
+    }
+
+    #[test]
+    fn test_parse_truncated_coment_memory_model_fails() {
+        let rec = Record{
+            rectype: RecordType::Comment,
+            data: &vec![0x80, 0x9d],
+        };
+
+        if let Ok(_) = OmfComentMemoryModel::new(&rec) {
+            assert!(false, "parsing truncated COMENT memory model succeeded");
+        } 
+    }
+
+    #[test]
+    fn test_parse_coment_dos_version_succeeds() {
+        let rec = Record{
+            rectype: RecordType::Comment,
+            data: &vec![0x80, 0x9c, 0x33, 0x30],
+        };
+
+        if let Ok(lib) = OmfComentDosVersion::new(&rec) {
+            assert_eq!(lib.com.comtype, 0x80);
+            assert_eq!(lib.com.class, CommentClass::DosVersion);
+            assert_eq!(lib.version, "30".to_string());
+        } else {
+            assert!(false, "parsing valid COMENT DOS version failed");
+        }
+    }
+
+    #[test]
+    fn test_parse_truncated_coment_dos_version_fails() {
+        let rec = Record{
+            rectype: RecordType::Comment,
+            data: &vec![0x80, 0x9c],
+        };
+
+        if let Ok(_) = OmfComentDosVersion::new(&rec) {
+            assert!(false, "parsing truncated COMENT DOS version succeeded");
         } 
     }
 
