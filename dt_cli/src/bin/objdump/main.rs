@@ -169,7 +169,7 @@ impl Objdump {
             Coment::MemoryModel{ text } => println!("  Memory model '{}'", text),
             Coment::DefaultLibrary{ name } => println!("  Default library '{}'", name),
 
-            x => println!("  Unknown comment class {:02x}", header.comclass),
+            _ => println!("  Unknown comment class {:02x}", header.comclass),
         }
 
         Ok(())
@@ -231,6 +231,17 @@ impl Objdump {
         }
         Ok(())
     }
+
+    fn bakpat(&self, seg: usize, location: BakpatLocation, fixups: &[BakpatFixup]) -> Result<(), AppError> {
+        println!("BAKPAT {} {:?}", self.segname(&self.segments[seg]), location);
+
+        for fixup in fixups {
+            println!("      Offset {:08x} Value {:08x}", fixup.offset, fixup.value);
+        }
+
+        Ok(())
+
+    }
 }
 
 fn objdump() -> Result<(), AppError> {
@@ -250,6 +261,7 @@ fn objdump() -> Result<(), AppError> {
             Record::PUBDEF{ group, seg, frame, publics} => objdump.pubdef(group, seg, frame, &publics)?,
             Record::COMENT{ header, coment } => objdump.coment(header, &coment)?,
             Record::LEDATA{ seg, offset, data } => objdump.ledata(seg, offset, &data)?,
+            Record::BAKPAT{ seg, location, fixups} => objdump.bakpat(seg, location, &fixups)?,
             Record::None => break,
             x => { println!("record {:x?}", x)},
         }

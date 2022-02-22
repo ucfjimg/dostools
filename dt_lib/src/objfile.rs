@@ -246,6 +246,35 @@ pub enum Coment {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+pub enum BakpatLocation {
+    Byte,
+    Word,
+    Dword,
+}
+
+impl TryFrom<u8> for BakpatLocation {
+    type Error = ObjError;
+
+    fn try_from(val: u8) -> Result<Self, Self::Error> {
+        match val {
+            0 => Ok(BakpatLocation::Byte),
+            1 => Ok(BakpatLocation::Word),
+            2|9 => Ok(BakpatLocation::Dword),
+
+            val => Err(ObjError::new(&format!("invalid BAKPAT location ${:02x}", val))),
+        }
+    }
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub struct BakpatFixup {
+    pub offset: u32,
+    pub value: u32,
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
 pub enum Record {
     None,
     Unknown{ rectype: u8 },
@@ -259,6 +288,7 @@ pub enum Record {
     PUBDEF{ group: Option<usize>, seg: Option<usize>, frame: Option<u16>, publics: Vec<Public> },
     COMENT{ header: ComentHeader, coment: Coment },
     LEDATA{ seg: usize, offset: u32, data: Vec<u8> },
+    BAKPAT{ seg: usize, location: BakpatLocation, fixups: Vec<BakpatFixup> },
 }
 
 pub struct Parser {
@@ -512,6 +542,22 @@ impl Parser {
         Ok(Record::LEDATA{ seg, offset, data: data.to_vec() })
     }
 
+    fn bakpat(&mut self, is32: bool) -> Result<Record, ObjError> {
+        let seg = self.next_index()?;
+        let location = (self.next_uint(1)? as u8).try_into()?;
+
+        let mut fixups = Vec::new();
+
+        let bytes = if is32 { 4 } else { 2 };
+        while self.ptr < self.endrec() {
+            let offset = self.next_uint(bytes)? as u32;
+            let value = self.next_uint(bytes)? as u32;
+            fixups.push(BakpatFixup{ offset, value });
+        }
+
+        Ok(Record::BAKPAT{ seg, location, fixups })
+    }
+
     fn coment_translator(&mut self, header: ComentHeader) -> Result<Record, ObjError> {
         let text = self.rest_str()?;
         Ok(Record::COMENT{
@@ -574,6 +620,8 @@ impl Parser {
             0x9a => self.grpdef(),
             0xa0 => self.ledata(false),
             0xa1 => self.ledata(true),
+            0xb2 => self.bakpat(false),
+            0xb3 => self.bakpat(true),
             rectype => Ok(Record::Unknown{ rectype }),
         }
     }
@@ -1192,4 +1240,56 @@ mod test {
             x => assert!(false, "parser returned {:x?}", x),
         }
     }
+
+    //
+    // BAKPAT
+    //
+    #[test]
+    fn test_bakpat_succeeds() {
+        let obj = vec![
+            0xb2, 0x0b, 0x00, 
+            0x01,
+            0x01,
+            0x02, 0x00, 0x34, 0x12,
+            0x05, 0x01, 0x78, 0x56,
+            0x00
+        ];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::BAKPAT{ seg, location, fixups }) => {
+                assert_eq!(seg, 1);
+                assert_eq!(location, BakpatLocation::Word);
+                assert_eq!(fixups, vec![
+                    BakpatFixup{ offset: 0x0002, value: 0x1234 },
+                    BakpatFixup{ offset: 0x0105, value: 0x5678 },
+                ]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_bakpat32_succeeds() {
+        let obj = vec![
+            0xb3, 0x0b, 0x00, 
+            0x01,
+            0x02,
+            0x02, 0x00, 0x01, 0x00, 0x34, 0x12, 0x55, 0xaa,
+            0x00
+        ];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::BAKPAT{ seg, location, fixups }) => {
+                assert_eq!(seg, 1);
+                assert_eq!(location, BakpatLocation::Dword);
+                assert_eq!(fixups, vec![
+                    BakpatFixup{ offset: 0x00010002, value: 0xaa551234 },
+                ]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
 }
+
