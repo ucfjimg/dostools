@@ -248,7 +248,7 @@ mod tests {
     fn result_eq<T>(a: Result<T, MyError>, b: Result<T, MyError>) -> bool where
         T: std::cmp::PartialEq {
         match (a, b) {
-            (Err(MyError{details: aerr}), Err(MyError{details:berr})) => aerr == berr,
+            (Err(MyError{details: aerr, offset: None}), Err(MyError{details:berr, offset: None})) => aerr == berr,
             (Ok(aval), Ok(bval)) => aval == bval,
             _ => false,
         }

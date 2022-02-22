@@ -1,60 +1,146 @@
-/// Functions for parsing OMF (Object Module Format). An OMF file 
-/// (commonly known as an obj file) contains multiple record, each
-/// with a type, length and checksum. The payload depends on the
-/// type value.
-///
-/// ObjFile represents the object file, and an OmfRecord one record.
-///
-///
-/// Each type of record has a parser named after the record type in
-/// the OMF specification, and an associated struct.
-///  
-/// 
-use std::convert::TryFrom;
-use std::fs;
-use std::io;
-use std::str;
+use crate::error::Error as ObjError;
 
-use crate::error::Error as OmfError;
-use crate::record::CommentClass;
-use crate::record::RecordType;
-use crate::record::Record;
-use crate::record::RecordParser;
-
-
-// aligments ('A' field of segdef acbp)
-//
-#[derive(Clone)]
-#[derive(Copy)]
 #[derive(Debug)]
 #[derive(PartialEq)]
-pub enum Align {
-    Absolute = 0,
-    Byte = 1,
-    Word = 2,
-    Para = 16,
-    Page = 256,
-    Dword = 4,
+pub enum FrameMethod {
+    Segdef,
+    Grpdef,
+    Extdef,
+    PreviousDataRecord,
+    Target,
 }
 
-impl TryFrom<u8> for Align {
-    type Error = OmfError;
+impl TryFrom<u8> for FrameMethod {
+    type Error = ObjError;
 
-    fn try_from(v: u8) -> Result<Self, Self::Error> {
-        match v {
-            0 => Ok(Align::Absolute),
-            1 => Ok(Align::Byte),
-            2 => Ok(Align::Word),
-            3 => Ok(Align::Para),
-            4 => Ok(Align::Page),
-            5 => Ok(Align::Dword),
-            _ => Err(OmfError::new(&format!("invalid align value ${:02x}", v)))
+    fn try_from(val: u8) -> Result<Self, Self::Error> {
+        match val {
+            0 => Ok(FrameMethod::Segdef),
+            1 => Ok(FrameMethod::Grpdef),
+            2 => Ok(FrameMethod::Extdef),
+            4 => Ok(FrameMethod::PreviousDataRecord),
+            5 => Ok(FrameMethod::Target),
+
+            val => Err(ObjError::new(&format!("invalid frame method ${:02x}", val))),
+        }
+    }
+}
+
+impl FrameMethod {
+    fn has_datum(&self) -> bool {
+        *self == FrameMethod::Segdef ||
+        *self == FrameMethod::Grpdef || 
+        *self == FrameMethod::Extdef
+    }
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub enum TargetMethod {
+    Segdef,
+    Grpdef,
+    Extdef,
+    SegdefNoDisplacement,
+    GrpdefNoDisplacement,
+    ExtdefNoDisplacement,
+}
+
+impl TryFrom<u8> for TargetMethod {
+    type Error = ObjError;
+
+    fn try_from(val: u8) -> Result<Self, Self::Error> {
+        match val {
+            0 => Ok(TargetMethod::Segdef),
+            1 => Ok(TargetMethod::Grpdef),
+            2 => Ok(TargetMethod::Extdef),
+            4 => Ok(TargetMethod::SegdefNoDisplacement),
+            5 => Ok(TargetMethod::GrpdefNoDisplacement),
+            6 => Ok(TargetMethod::ExtdefNoDisplacement),
+
+            val => Err(ObjError::new(&format!("invalid target method ${:02x}", val))),
+        }
+    }
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub struct StartAddress {
+    pub fix_data: u8,
+    pub frame_datum: Option<usize>,
+    pub target_datum: Option<usize>,
+    pub target_disp: Option<u32>,
+}
+
+impl StartAddress {
+    pub fn fthread(&self) -> bool {
+        (self.fix_data & 0x80) != 0
+    }
+
+    pub fn fmethod(&self) -> Result<Option<FrameMethod>, ObjError> {
+        Ok(if self.fthread() { None } else {
+            let method = ((self.fix_data >> 4) & 7).try_into()?;
+            Some(method)
+        })
+    }
+
+    pub fn fthreadno(&self) -> Option<usize> {
+        if self.fthread() {
+            Some(((self.fix_data >> 4) & 7) as usize)
+        } else { 
+            None
+        }
+    }
+
+    pub fn tthread(&self) -> bool {
+        (self.fix_data & 0x08) != 0
+    }
+
+    pub fn tmethod(&self) -> Result<Option<TargetMethod>, ObjError> {
+        Ok(if self.tthread() { None } else {
+            let method = (self.fix_data & 7).try_into()?;
+            Some(method)
+        })
+    }
+
+    pub fn tthreadno(&self) -> Option<usize> {
+        if self.tthread() {
+            Some((self.fix_data & 7) as usize)
+        } else { 
+            None
         }
     }
 }
 
 #[derive(Clone)]
-#[derive(Copy)]
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub enum Align {
+    Absolute,
+    Byte,
+    Word,
+    Paragraph,
+    Page,
+    Dword,
+}
+
+impl TryFrom<u8> for Align {
+    type Error = ObjError;
+
+    fn try_from(val: u8) -> Result<Self, Self::Error> {
+        match val {
+            0 => Ok(Align::Absolute),
+            1 => Ok(Align::Byte),
+            2 => Ok(Align::Word),
+            3 => Ok(Align::Paragraph),
+            4 => Ok(Align::Page),
+            5 => Ok(Align::Dword),
+
+            val => Err(ObjError::new(&format!("invalid align ${:02x}", val))),
+        }
+    }
+}
+
+#[derive(Clone)]
 #[derive(Debug)]
 #[derive(PartialEq)]
 pub enum Combine {
@@ -65,1583 +151,1045 @@ pub enum Combine {
 }
 
 impl TryFrom<u8> for Combine {
-    type Error = OmfError;
+    type Error = ObjError;
 
-    fn try_from(v: u8) -> Result<Self, Self::Error> {
-        match v {
+    fn try_from(val: u8) -> Result<Self, Self::Error> {
+        match val {
             0 => Ok(Combine::Private),
-            2 | 4 | 7 => Ok(Combine::Public),
+            2|4|7 => Ok(Combine::Public),
             5 => Ok(Combine::Stack),
             6 => Ok(Combine::Common),
-            _ => Err(OmfError::new(&format!("invalid combine value ${:02x}", v)))
+
+            val => Err(ObjError::new(&format!("invalid combine ${:02x}", val))),
         }
     }
 }
 
-const ACBP_BIG: u8 = 0x02;
-const ACBP_USE32: u8 = 0x01;
+#[derive(Clone)]
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub struct AbsoluteSeg {
+    pub frame: u16,
+    pub offset: u8,
+}
 
-// Represents an entire object file being parsed. Since object
-// files are small compared to memory, the entire file is read
-// in at the start of parsing.
-//
-pub struct ObjFile {
-    data: Vec<u8>,
+#[derive(Clone)]
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub struct Segdef {
+    pub align: Align,
+    pub combine: Combine,
+    pub use32: bool,
+    pub abs: Option<AbsoluteSeg>,
+    pub length: u64,
+    pub class: Option<usize>,
+    pub name: Option<usize>,
+    pub overlay: Option<usize>,
+}
+
+impl Segdef {
+    pub fn empty() -> Segdef {
+        Segdef {
+            align: Align::Byte,
+            combine: Combine::Public,
+            use32: false,
+            abs: None,
+            length: 0,
+            class: None,
+            name: None,
+            overlay: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub struct Extern {
+    pub name: String,
+    pub typeidx: usize,
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub struct Public {
+    pub name: String,
+    pub offset: u32,
+    pub typeidx: usize,
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub struct ComentHeader {
+    pub comtype: u8,
+    pub comclass: u8,
+}
+
+impl ComentHeader {
+    pub fn nopurge(&self) -> bool {
+        (self.comtype & 0x80) != 0
+    }
+
+    pub fn nolist(&self) -> bool {
+        (self.comtype & 0x40) != 0
+    }
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub enum Coment {
+    Unknown,
+    Translator{ text: String },
+    MemoryModel{ text: String },
+    NewOMF{ text: String },
+    DefaultLibrary{ name: String },
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub enum Record {
+    None,
+    Unknown{ rectype: u8 },
+
+    THEADR{ name: String },
+    MODEND{ main: bool, start_address: Option<StartAddress> },
+    LNAMES{ names: Vec<String> },
+    SEGDEF{ segs: Vec<Segdef> },
+    GRPDEF{ name: usize, segs: Vec<usize> },
+    EXTDEF{ externs: Vec<Extern> },
+    PUBDEF{ group: Option<usize>, seg: Option<usize>, frame: Option<u16>, publics: Vec<Public> },
+    COMENT{ header: ComentHeader, coment: Coment },
+    LEDATA{ seg: usize, offset: u32, data: Vec<u8> },
+}
+
+pub struct Parser {
+    obj: Vec<u8>,
+    start: usize,
+    ptr: usize,
     next: usize,
 }
 
-// Compute the checkum of a potential record. The sum of the 
-// record type, both bytes of the length, and the payload
-// must be zero.
-//
-fn checksum(rectype: u8, lo: u16, hi: u16, data: &[u8]) -> bool {
-    if data.len() == 0 {
-        // corrupt - no checksum byte at all
-        return false;
+impl Parser {
+    pub fn new(obj: Vec<u8>) -> Parser {
+        Parser{ obj, start: 0, ptr: 0, next: 0 }
     }
 
-    if data[data.len() - 1] == 0 {
-        // no checksum if the checksum byte is 0
-        return true;
+    fn err(&self, err: &str) -> ObjError {
+        ObjError::with_offset(err, self.start)
     }
 
-    let mut sum: u32 = 0;
-    sum += rectype as u32;
-    sum += lo as u32;
-    sum += hi as u32;
-
-    for x in data {
-        sum += *x as u32
+    fn endrec(&self) -> usize {
+        // record end does not include checksum byte
+        self.next - 1
     }
 
-    (sum & 0xff) == 0
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn checksum_succeeds() {
-        let b = checksum(1, 2, 3, &vec![(0x0100 - 6) as u8]);
-        assert_eq!(b, true);
-    }
-
-    #[test]
-    fn checksum_fails() {
-        let b = checksum(1, 2, 4, &vec![(0x0100 - 6) as u8]);
-        assert_eq!(b, false);
-    }
-}
-
-impl<'a> ObjFile {
-    // Create an object file, reset to the first record
-    //
-    pub fn new(data: Vec<u8>) -> ObjFile {
-        ObjFile {
-            data: data,
-            next: 0,
+    fn uint(data: &[u8]) -> usize {
+        let bytes = data.len();
+        let mut value: usize = 0;
+    
+        for i in 1..bytes+1 {
+            let byte = data[bytes - i] as usize;
+            value = (value << 8) | byte;
         }
+    
+        value
     }
-
-    // Read an object file from disk
-    //
-    pub fn read(filename: &str) -> io::Result<ObjFile> {
-        let data = fs::read(filename)?;
-        Ok(ObjFile::new(data))
-    }
-
-    // Read the next object record and verify the checksum
-    //
-    pub fn next(&'a mut self) -> Result<Option<Record<'a>>, OmfError> {
-        if self.next >= self.data.len() {
-            Ok(None)
+    
+    fn next_uint(&mut self, size: usize) -> Result<usize, ObjError> {
+        if self.ptr + size > self.endrec() {
+            Err(self.err("next_uint: record is truncated"))
         } else {
-            let left = self.data.len() - self.next;
-
-            if left < 3 {
-                return Err(OmfError::new("OMF record truncated"));
-            }
-
-            let rectype = self.data[self.next];
-            let lo = self.data[self.next + 1] as u16;
-            let hi = self.data[self.next + 2] as u16;
-
-            let left = left - 3;
-            let start = self.next + 3;
-            let length = ((hi << 8) | lo) as usize;
-
-            if left < length {
-                return Err(OmfError::new("OMF record truncated"));
-            }
-
-            self.next = start + length;
-
-            let slice = &self.data[start..self.next];
-            if !checksum(rectype, lo, hi, slice) {
-                return Err(OmfError::new("OMF record failed checksum"));
-            }
-            
-            Ok(Some(Record{
-                rectype: rectype.into(),
-                data: &slice[0..slice.len()-1],
-            }))
+            let value = Self::uint(&self.obj[self.ptr..self.ptr+size]);
+            self.ptr += size;
+            Ok(value)
         }
     }
 
-    // Read the next object record with no checksum (used by library
-    // records).
-    //
-    pub fn next_no_checksum(&'a mut self) -> Result<Option<Record<'a>>, OmfError> {
-        if self.next >= self.data.len() {
-            Ok(None)
+    fn next_str(&mut self) -> Result<String, ObjError> {
+        if self.ptr >= self.endrec() {
+            Err(self.err("next_str: no length byte"))
         } else {
-            let left = self.data.len() - self.next;
-
-            if left < 3 {
-                return Err(OmfError::new("OMF record truncated"));
-            }
-
-            let rectype = self.data[self.next];
-            let lo = self.data[self.next + 1] as u16;
-            let hi = self.data[self.next + 2] as u16;
-
-            let left = left - 3;
-            let start = self.next + 3;
-            let length = ((hi << 8) | lo) as usize;
-
-            if left < length {
-                return Err(OmfError::new("OMF record truncated"));
-            }
-
-            self.next = start + length;
-
-            let slice = &self.data[start..self.next];
-            Ok(Some(Record{
-                rectype: rectype.into(),
-                data: &slice[0..slice.len()-1],
-            }))
-        }
-    }
-}
-
-#[cfg(test)]
-mod objfile_tests {
-    use super::*;
-
-    #[test]
-    fn test_object_file_parses_record() {
-        let data = vec![0x80, 0x03, 0x00, 0x41, 0x42, 0xfa];
-        let mut obj = ObjFile::new(data);
-
-        if let Ok(Some(rec)) = obj.next() {
-            if rec.rectype == RecordType::THeader {
-                assert!(true);
+            let len = self.obj[self.ptr] as usize;
+            self.ptr += 1;
+    
+            if self.ptr + len > self.obj.len() {
+                Err(self.err("next_str: string is truncated"))
             } else {
-                assert!(false);
-            }
-            assert_eq!(rec.data.len(), 2);
-            assert_eq!(rec.data, vec![0x41, 0x42]);
-        } else {
-            assert!(false);
-        }
-    }
-
-    #[test]
-    fn test_object_file_errors_on_checksum() {
-        let data = vec![0x80, 0x03, 0x00, 0x41, 0x42, 0xfb];
-        let mut obj = ObjFile::new(data);
-
-        if let Ok(Some(rec)) = obj.next() {
-            if rec.rectype == RecordType::THeader {
-                assert!(false);
-            } else {
-                assert!(false);
-            }
-        } else {
-            assert!(true);
-        }
-    }
-
-    #[test]
-    fn test_object_file_errors_on_truncation() {
-        let data = vec![0x80, 0x04, 0x00, 0x41, 0x42, 0xfa];
-        let mut obj = ObjFile::new(data);
-
-        if let Ok(Some(rec)) = obj.next() {
-            if rec.rectype == RecordType::THeader {
-                assert!(false);
-            } else {
-                assert!(false);
-            }
-        } else {
-            assert!(true);
-        }
-    }
-
-    #[test]
-    fn test_object_file_detects_end() {
-        let data = vec![0x80, 0x03, 0x00, 0x41, 0x42, 0xfa];
-        let mut obj = ObjFile::new(data);
-
-        if let Ok(Some(rec)) = obj.next() {
-            if rec.rectype == RecordType::THeader {
-                assert!(true);
-            } else {
-                assert!(false);
-            }
-            assert_eq!(rec.data.len(), 2);
-            assert_eq!(rec.data, vec![0x41, 0x42]);
-        } else {
-            assert!(false);
-        }
-
-        if let Ok(None) = obj.next() {
-            assert!(true);
-        } else {
-            assert!(false);
-        }
-    }
-
-
-    #[test]
-    fn test_object_file_handles_invalid_type() {
-        // 0x81 is not a valid record type
-        //
-        let data = vec![0x81, 0x03, 0x00, 0x41, 0x42, 0xf9];
-        let mut obj = ObjFile::new(data);
-
-        if let Ok(Some(rec)) = obj.next() {
-            let rectype = rec.rectype;
-
-            if let RecordType::Unknown{typ: _} = rec.rectype {
-                // by design, invalid record types have 'None'
-                // here so we can still parse and skip records we
-                // don't understand
-                assert!(true)
-            } else {
-                assert!(false);
-            }
-        } else {
-            assert!(false);
-        }
-    }
-}
-
-pub fn check_rectype(rec: &Record, rectype: RecordType, parser: &str) -> Result<RecordType, OmfError> {
-    if rectype == rec.rectype {
-        return Ok(rectype);
-    }
-
-    let type32 = u8::from(rectype) | 0x01;
-    let type32 = type32.into();
-    if type32 == rec.rectype {
-        return Ok(type32);
-    }        
+                let s = &self.obj[self.ptr..self.ptr+len];
+                self.ptr += len;
         
-    Err(OmfError::bad_rectype(rectype, parser))
-}
-
-// The THEADR record, which starts an object file
-//
-pub struct OmfTheadr {
-    pub name: String,
-}
-
-impl OmfTheadr {
-    // Parse a THEADR record
-    //
-    pub fn new(rec: &Record) -> Result<OmfTheadr, OmfError> {
-        check_rectype(rec, RecordType::THeader, "THEADR")?;
-        let mut parser = RecordParser::new(&rec);
-
-        let name = parser.next_str()?;
-        
-        Ok(OmfTheadr{
-            name: name,
-        })
-    }
-}
-
-// The MODEND record, which ends an object file and has optional
-// entry point data
-//
-pub struct OmfModend {
-    modtype: u8,
-    enddata: Option<u8>,
-    frame: Option<u16>,
-    target: Option<u16>,
-    displ: Option<u32>,
-    is32: bool,
-}
-
-impl OmfModend {
-    pub fn new(rec: &Record) -> Result<OmfModend, OmfError> {
-        let rectype = check_rectype(rec, RecordType::ModEnd, "MODEND")?;
-        let is32 = rectype.is32();
-        let mut parser = RecordParser::new(&rec);
-
-        let modtype = parser.next_byte()?;
-
-        // TODO parse ending information
-
-        Ok(OmfModend{
-            modtype: modtype,
-            enddata: None,
-            frame: None,
-            target: None,
-            displ: None,
-            is32: is32,
-        })
-    }
-}
-
-
-// The COMENT record. Contrary to the name, this is not 
-// ignorable information. A COMENT record has a class
-// which indicates the contents; this mechanism has been 
-// used to extend the functionality of the original 
-// defined set of record types.
-//
-pub struct Coment {
-    pub comtype: u8,
-    pub class: CommentClass,
-}
-
-impl Coment {
-    // Parse a comment record header, which is just the
-    // first two bytes.
-    //
-    pub fn new(parser: &mut RecordParser) -> Result<Coment, OmfError> {
-        let comtype = parser.next_byte()?;
-        let class = parser.next_byte()?.into();
-
-        Ok(Coment{
-            comtype: comtype,
-            class: class,
-        })
+                String::from_utf8(s.to_vec()).map_err(|err| self.err(&format!("{:x?}", err)))
+            }
+        }
     }
 
-    // Given a COMENT record, return the comment's class. 
-    // The module user must use this to determine the appropriate
-    // coment parser to use.
-    //
-    pub fn comclass(rec: &Record) -> Result<CommentClass, OmfError> {
-        check_rectype(rec, RecordType::Comment, "COMENT")?;
+    fn rest_str(&mut self) -> Result<String, ObjError> {
+        let bytes = &self.obj[self.ptr..self.endrec()];
+        self.ptr = self.endrec();
+        String::from_utf8(bytes.to_vec()).map_err(|err| self.err(&format!("{:x?}", err)))
+    }
 
-        if rec.data.len() < 2 {
-            Err(OmfError::truncated())
+    fn next_index(&mut self) -> Result<usize, ObjError> {
+        let index = self.next_uint(1)?;
+
+        if index < 0x80 {
+            Ok(index)
         } else {
-            Ok(rec.data[1].into())
+            Ok(
+                ((index & 0x7f) << 8) | self.next_uint(1)?
+            )
         }
     }
-}
 
-// A COMENT record which specifies the memory model.
-//
-pub struct OmfComentMemoryModel {
-    pub com: Coment,
-    pub model: String,
-}
-
-impl OmfComentMemoryModel {
-    // Parse a COMENT library specification.
-    //
-    pub fn new(rec: &Record) -> Result<OmfComentMemoryModel, OmfError> {
-        check_rectype(rec, RecordType::Comment, "COMENT")?;
-        let mut parser = RecordParser::new(&rec);
-
-        let com = Coment::new(&mut parser)?;
-        if com.class != CommentClass::MemoryModel {
-            println!("{:?}", rec);
-            return Err(OmfError::bad_comclass(com.class, "COMENT_MEMORY_MODEL"))
-        }
-
-        let model = parser.rest_str()?;
-        if model.len() == 0 {
-            return Err(OmfError::truncated());
-        }
-        
-        Ok(OmfComentMemoryModel{
-            com: com,
-            model: model,
+    fn next_opt_index(&mut self) -> Result<Option<usize>, ObjError> {
+        Ok(match self.next_index()? {
+            0 => None,
+            index => Some(index),
         })
     }
-}
 
-// A COMENT record which specifies the DOS version (deprecated).
-//
-pub struct OmfComentDosVersion {
-    pub com: Coment,
-    pub version: String,
-}
-
-impl OmfComentDosVersion {
-    // Parse a COMENT library specification.
-    //
-    pub fn new(rec: &Record) -> Result<OmfComentDosVersion, OmfError> {
-        check_rectype(rec, RecordType::Comment, "COMENT")?;
-        let mut parser = RecordParser::new(&rec);
-
-        let com = Coment::new(&mut parser)?;
-        if com.class != CommentClass::DosVersion {
-            println!("{:?}", rec);
-            return Err(OmfError::bad_comclass(com.class, "COMENT_DOS_VERSION"))
-        }
-
-        let version = parser.rest_str()?;
-        if version.len() == 0 {
-            return Err(OmfError::truncated());
-        }
-        
-        Ok(OmfComentDosVersion{
-            com: com,
-            version: version,
-        })
-    }
-}
-
-// A COMENT record which specifies a library to link.
-//
-pub struct OmfComentLib {
-    pub com: Coment,
-    pub path: String,
-}
-
-
-impl OmfComentLib {
-    // Parse a COMENT library specification.
-    //
-    pub fn new(rec: &Record) -> Result<OmfComentLib, OmfError> {
-        check_rectype(rec, RecordType::Comment, "COMENT")?;
-        let mut parser = RecordParser::new(&rec);
-
-        let com = Coment::new(&mut parser)?;
-        if com.class != CommentClass::DefaultLibrary {
-            println!("{:?}", rec);
-            return Err(OmfError::bad_comclass(com.class, "COMENT_LIB"))
-        }
-
-        let path = parser.rest_str()?;
-
-        if path.len() == 0 {
-            return Err(OmfError::truncated());
-        }
-        
-        Ok(OmfComentLib{
-            com: com,
-            path: path,
-        })
-    }
-}
-
-// A list of names. Names are indexed starting at 1, across
-// all LNAMES records. e.g. given these two records 
-//
-// LNAMES "a","b","c"
-// LNAMES "foo"
-//
-// The names are indexed from other records as
-// 1 "a"
-// 2 "b"
-// 3 "c"
-// 4 "foo"
-// 
-pub struct OmfLnames {
-    pub names: Vec<String>,
-}
-
-impl OmfLnames {
-    // Parse an LNAMES record
-    //
-    pub fn new(rec: &Record) -> Result<OmfLnames, OmfError> {
-        check_rectype(rec, RecordType::LNames, "LNAMES")?;
-
-        let mut parser = RecordParser::new(&rec);
-        let mut names = Vec::new();
-        
-        loop {
-            if parser.end() {
-                break;
+    fn checksum(bytes: &[u8]) -> bool {
+        if *bytes.last().unwrap() == 0 {
+            true
+        } else {
+            let mut sum = 0;
+            for byte in  bytes {
+                sum += *byte as usize;
             }
 
-            names.push(parser.next_str()?);
-        }
-
-        Ok(OmfLnames{
-            names: names,
-        })
-    }
-}
-
-// One logical segment definition
-//
-#[derive(Clone)]
-pub struct OmfSegment {
-    pub use32: bool,
-    pub align: Align,       // alignment, parsed
-    pub combine: Combine,   // combine, parsed
-    pub frame: Option<u16>, // frame, if absolute
-    pub offset: Option<u8>, // offset w/in frame
-    pub length: u64,        // really 16 or 32 bits, we can represent a full 32-bit length 0x100000000
-    pub name: usize,        // index into lnames
-    pub class: usize,       // index into lnames
-    pub overlay: usize,     // index into lnames
-}
-
-impl OmfSegment {
-    pub fn empty() -> OmfSegment {
-        OmfSegment {
-            use32: false,
-            align: Align::Byte,
-            combine: Combine::Private,
-            frame: None,
-            offset: None,
-            length: 0,
-            name: 0,
-            class: 0,
-            overlay: 0,
+            (sum & 0xff) == 0
         }
     }
-}
 
-// A SEGDEF record has multiple segment definitions
-//
-pub struct OmfSegdef {
-    pub omfsegs: Vec<OmfSegment>,
-}
+    fn modend(&mut self, is32: bool) -> Result<Record, ObjError> {
+        let modtype = self.next_uint(1)?;
 
-impl OmfSegdef {
-    // Parse a SEGDEF record
-    //
-    pub fn new(rec: &Record) -> Result<OmfSegdef, OmfError> {
-        let rectype = check_rectype(rec, RecordType::SegDef, "SEGDEF")?;
-        let is32 = rectype.is32();
-        let mut parser = RecordParser::new(&rec);
+        let main = (modtype & 0x80) != 0;
+        let has_start = (modtype & 0x40) != 0;
 
-        let mut segdefs = Vec::new();
+        // NB the spec claims that bit 5 (0x20) must be zero and bit 0 (0x01) 
+        // must be 1, but real-life objects from MS tools don't obey this.
 
-        while !parser.end() {
-            let acbp = parser.next_byte()?;
-            let align: Align = ((acbp >> 5) & 7).try_into()?;
+        let bytes = if is32 { 4 } else { 2 };
 
-            let combine: Combine = ((acbp >> 2) & 7).try_into()?;
-            
-            let mut frame = Option::None;
-            let mut offset = Option::None;
+        let start_address = if !has_start { None } else  {
+            let fix_data = self.next_uint(1)? as u8;
+            let f_thread = (fix_data & 0x80) != 0;
+            let f_method: FrameMethod = ((fix_data >> 4) & 7).try_into()?;
+            let t_thread = (fix_data & 0x08) != 0;
+            let p_displ = (fix_data & 0x04) != 0;
 
-            if align == Align::Absolute {
-                frame = Some(parser.next_uint(false)? as u16);
-                offset = Some(parser.next_byte()?);
-            }
-            
-            let given_length = parser.next_uint(is32)? as u64;
-
-            let length = if acbp & ACBP_BIG != 0 {
-                if given_length != 0 {
-                    return Err(OmfError::new("segdef has BIG bit set but length is not zero."));
-                }
-                if is32 { 0x1_0000_0000 } else { 0x1_0000 }
-            } else {
-                given_length
-            };
-            
-            let name = parser.next_index()?;
-            let class = parser.next_index()?;
-            let overlay = parser.next_index()?;
-
-            segdefs.push(OmfSegment{
-                use32: acbp & ACBP_USE32 != 0,
-                align: align,
-                combine: combine,
-                frame: frame,
-                offset: offset,
-                length: length,
-                class: class,
-                name: name,
-                overlay: overlay,
-            })
-        }
-
-        Ok(OmfSegdef{
-            omfsegs: segdefs,
-        })
-    }
-}
-
-pub struct OmfGrpdef {
-    pub name: usize,
-    pub segs: Vec<usize>,
-}
-
-impl OmfGrpdef {
-    // Parse a SEGDEF record
-    //
-    pub fn new(rec: &Record) -> Result<OmfGrpdef, OmfError> {
-        check_rectype(rec, RecordType::GrpDef, "GRPDEF")?;
-        let mut parser = RecordParser::new(&rec);
-
-        let name = parser.next_index()?;
-
-        let mut grpdef = OmfGrpdef {
-            name: name,
-            segs: Vec::new(),
+            let frame_datum = if f_thread || !f_method.has_datum() { None } else { self.next_opt_index()? };
+            let target_datum = if t_thread { None } else { self.next_opt_index()? };
+            let target_disp = if !p_displ { Some(self.next_uint(bytes)? as u32) } else { None };   
+            Some(StartAddress{ fix_data, frame_datum, target_datum, target_disp })
         };
 
-        if parser.end() {
-            return Err(OmfError::truncated());
-        }
+        Ok(Record::MODEND{ main, start_address })
+    }
 
-        while !parser.end() {
-            let typindex = parser.next_byte()?;
-            let seg = parser.next_index()?;
-        
-            // NB originally a group could contain other things, but any valid 
-            // object file now has ff here meaning a segment index.
-            if typindex != 0xff {
-                return Err(OmfError::new("GRPDEF element must be a segment index"));
+    fn lnames(&mut self) -> Result<Record, ObjError> {
+        let mut names = Vec::new();
+
+        while self.ptr < self.endrec() {
+            names.push(self.next_str()?);
+        }
+    
+        Ok(Record::LNAMES{ names })
+    }
+
+    fn segdef(&mut self, is32: bool) -> Result<Record, ObjError> {
+        let mut segs = Vec::new();
+
+        let bytes = if is32 { 4 } else { 2 };
+
+        while self.ptr < self.endrec() {
+            let acbp = self.next_uint(1)? as u8;
+
+            let align = (acbp >> 5).try_into()?; 
+            let combine = ((acbp >> 2) & 7).try_into()?;
+            let big = (acbp & 2) != 0;
+            let use32 = (acbp & 1) != 0;
+
+            let abs = if align == Align::Absolute {
+                let frame = self.next_uint(2)? as u16;
+                let offset = self.next_uint(1)? as u8;
+
+                Some(AbsoluteSeg { frame, offset })
+            } else {
+                None
+            };
+
+            let mut length = self.next_uint(bytes)?;
+            
+            if big {
+                if length != 0 {
+                    return Err(self.err("length not zero when BIG bit it set"));
+                }
+                length = 1 << if is32 { 32 } else { 16 };
             }
 
-            grpdef.segs.push(seg);
+            let class = self.next_opt_index()?;
+            let name = self.next_opt_index()?;
+            let overlay = self.next_opt_index()?;
+            
+            segs.push(Segdef{
+                align,
+                combine,
+                use32,
+                abs,
+                length: length as u64,
+                class,
+                name,
+                overlay
+            });
         }
-        
-        Ok(grpdef)
+
+        Ok(Record::SEGDEF{ segs })
     }
-}
 
-pub struct OmfExtern {
-    pub name: String,
-    pub typindex: usize,
-}
+    fn grpdef(&mut self) -> Result<Record, ObjError> {
+        let name = self.next_index()?;
+        let mut segs = Vec::new();
 
-impl OmfExtern {
-    fn new(name: String, typindex: usize) -> OmfExtern {
-        OmfExtern {
-            name: name,
-            typindex: typindex,
+        while self.ptr < self.endrec() {
+            let typ = self.next_uint(1)?;
+            let index = self.next_index()?;
+            
+            if typ != 0xff {
+                return Err(self.err("grpdef segment with type other than FF"));
+            }
+
+            segs.push(index);
         }
+
+        Ok(Record::GRPDEF{ name, segs })
     }
-}
 
-pub struct OmfExtdef {
-    pub externs: Vec<OmfExtern>,
-}
+    fn extdef(&mut self) -> Result<Record, ObjError> {
+        let mut externs = Vec::new();
 
-impl OmfExtdef {
-    // Parse an EXTDEF record
-    //
-    pub fn new(rec: &Record) -> Result<OmfExtdef, OmfError> {
-        check_rectype(rec, RecordType::ExtDef, "EXTDEF")?;
-        let mut parser = RecordParser::new(&rec);
-        let mut extdef = OmfExtdef {
-            externs: Vec::new(),
-        }; 
+        while self.ptr < self.endrec() {
+            let name = self.next_str()?;
+            let typeidx = self.next_index()?;
 
-        while !parser.end() {
-            let name = parser.next_str()?;
-            let typindex = parser.next_index()?;
-            extdef.externs.push(OmfExtern::new(name, typindex));
-        }        
-
-        Ok(extdef)
-    }
-}
-
-pub struct OmfPublic {
-    pub name: String,
-    pub offset: u32,
-    pub typindex: usize,
-}
-
-impl OmfPublic {
-    fn new(name: String, offset: u32, typindex: usize) -> OmfPublic {
-        OmfPublic {
-            name: name,
-            offset: offset,
-            typindex: typindex,
+            externs.push(Extern{ name, typeidx });
         }
+
+        Ok(Record::EXTDEF{ externs })
     }
-}
 
-pub struct OmfPubdef {
-    pub base_group: Option<usize>,
-    pub base_seg: Option<usize>,
-    pub base_frame: Option<u16>,
-    pub publics: Vec<OmfPublic>,
-}
+    fn pubdef(&mut self, is32: bool) -> Result<Record, ObjError> {
+        let group = self.next_opt_index()?;
+        let seg = self.next_opt_index()?;
 
-
-impl OmfPubdef {
-    // Parse a PUBDEF record
-    //
-    pub fn new(rec: &Record) -> Result<OmfPubdef, OmfError> {
-        let rectype = check_rectype(rec, RecordType::PubDef, "PUBDEF")?;
-        let is32 = rectype.is32();
-        let mut parser = RecordParser::new(&rec);
-
-        let group = parser.next_index()?;
-        let seg = parser.next_index()?;
-        let frame = if seg == 0 {
-            Some(parser.next_uint(false)? as u16)
+        let frame = if group.is_none() && seg.is_none() {
+            Some(self.next_uint(2)? as u16)
         } else {
             None
         };
 
+        let mut publics = Vec::new();
 
-        let mut pubdef = OmfPubdef {
-            base_group: if group != 0 { Some(group) } else { None },
-            base_seg: if seg != 0 { Some(seg) } else { None },
-            base_frame: frame,
-            publics: vec![],
-        };
+        let bytes = if is32 { 4 } else { 2 };
 
-        if parser.end() {
-            return Err(OmfError::new("PUBDEF contains no publics"));
+        while self.ptr < self.endrec() {
+            let name = self.next_str()?;
+            let offset = self.next_uint(bytes)? as u32;
+            let typeidx = self.next_index()?;
+
+            publics.push(Public{ name, offset, typeidx });
         }
 
-        while !parser.end() {
-            let name = parser.next_str()?;
-            let offset = parser.next_uint(is32)?;
-            let typindex = parser.next_index()?;
-
-            pubdef.publics.push(OmfPublic::new(name, offset, typindex));
-        }
-
-        Ok(pubdef)
+        Ok(Record::PUBDEF{ group, seg, frame, publics })
     }
-}
 
-pub struct OmfLExtdef {
-    pub externs: Vec<OmfExtern>,
-}
+    fn ledata(&mut self, is32: bool) -> Result<Record, ObjError> {
+        let seg = self.next_index()?;
+        let bytes = if is32 { 4 } else { 2 };
+        let offset = self.next_uint(bytes)? as u32;
+        let data = &self.obj[self.ptr..self.endrec()];
 
-impl OmfLExtdef {
-    // Parse an LEXTDEF record
-    //
-    pub fn new(rec: &Record) -> Result<OmfLExtdef, OmfError> {
-        check_rectype(rec, RecordType::LExtDef, "LEXTDEF")?;
-        let mut parser = RecordParser::new(&rec);
-        let mut extdef = OmfLExtdef {
-            externs: Vec::new(),
-        }; 
+        Ok(Record::LEDATA{ seg, offset, data: data.to_vec() })
+    }
 
-        while !parser.end() {
-            let name = parser.next_str()?;
-            let typindex = parser.next_index()?;
-            extdef.externs.push(OmfExtern::new(name, typindex));
-        }        
+    fn coment_translator(&mut self, header: ComentHeader) -> Result<Record, ObjError> {
+        let text = self.rest_str()?;
+        Ok(Record::COMENT{
+            header,
+            coment: Coment::Translator{ text }
+        })
+    }
 
-        Ok(extdef)
+    fn coment_new_omf(&mut self, header: ComentHeader) -> Result<Record, ObjError> {
+        let text = self.rest_str()?;
+        Ok(Record::COMENT{
+            header,
+            coment: Coment::NewOMF{ text }
+        })
+    }
+
+    fn coment_memory_model(&mut self, header: ComentHeader) -> Result<Record, ObjError> {
+        let text = self.rest_str()?;
+        Ok(Record::COMENT{
+            header,
+            coment: Coment::MemoryModel{ text }
+        })
+    }
+
+    fn coment_default_library(&mut self, header: ComentHeader) -> Result<Record, ObjError> {
+        let name = self.rest_str()?;
+        Ok(Record::COMENT{
+            header,
+            coment: Coment::DefaultLibrary{ name }
+        })
+    }
+
+    fn coment(&mut self) -> Result<Record, ObjError> {
+        let comtype = self.next_uint(1)? as u8;
+        let comclass = self.next_uint(1)? as u8;
+
+        let header = ComentHeader{ comtype, comclass };
+
+        match comclass {
+            0x00 => self.coment_translator(header),
+            0x9d => self.coment_memory_model(header),
+            0x9f => self.coment_default_library(header),
+            0xa1 => self.coment_new_omf(header),
+            _ => Ok(Record::COMENT{ header, coment: Coment::Unknown }), 
+        }
+    }
+
+    fn record(&mut self, rectype: u8) -> Result<Record, ObjError> {
+        match rectype {
+            0x80 => Ok(Record::THEADR{ name: self.next_str()? }),
+            0x88 => self.coment(),
+            0x8a => self.modend(false),
+            0x8b => self.modend(true),
+            0x8c => self.extdef(),
+            0x90 => self.pubdef(false),
+            0x91 => self.pubdef(true),
+            0x96 => self.lnames(),
+            0x98 => self.segdef(false),
+            0x99 => self.segdef(true),
+            0x9a => self.grpdef(),
+            0xa0 => self.ledata(false),
+            0xa1 => self.ledata(true),
+            rectype => Ok(Record::Unknown{ rectype }),
+        }
+    }
+
+    pub fn next(&mut self) -> Result<Record, ObjError> {
+        self.ptr = self.next;
+        self.next = self.obj.len();
+
+        if self.ptr >= self.obj.len() {
+            Ok(Record::None)
+        } else if self.next - self.ptr < 3  {
+            Err(self.err("record header truncated"))
+        } else {
+            let typ = self.next_uint(1)?;
+            let len = self.next_uint(2)?;
+            
+            if self.ptr + len > self.obj.len() {
+                Err(self.err("record body truncated"))
+            } else {
+                self.next = self.ptr + len;
+                if !Self::checksum(&self.obj[self.start..self.next]) {
+                    Err(self.err("checksum failed"))
+                } else {
+                    self.record(typ as u8)
+                }    
+            }
+        }
     }
 }
 
 #[cfg(test)]
-mod omfrec_tests {
+mod test {
     use super::*;
 
-    
     //
-    // THeader
+    // uint
     //
-
     #[test]
-    fn test_theader_succeeds() {
-        let rec = Record{
-            rectype: RecordType::THeader,
-            data: &vec![0x03, 0x41, 0x42, 0x43],
-        };
-
-        if let Ok(rec) = OmfTheadr::new(&rec) {
-            assert_eq!(rec.name, "ABC");    
-        } else {
-            assert!(false, "parse of valid THEADR failed");
-        }
+    fn test_uint_returns_short() {
+        let bytes = [0x34, 0x12];
+        assert_eq!(Parser::uint(&bytes), 0x1234);
     }
 
     #[test]
-    fn test_theader_errors_on_bad_type() {
-        let rec = Record{
-            rectype: RecordType::SegDef,
-            data: &vec![0x03, 0x41, 0x42, 0x43],
-        };
-
-        if let Ok(_) = OmfTheadr::new(&rec) {
-            assert!(false, "parse suceeded with invalid record type");    
-        }
-    }
-    
-    //
-    // ModEnd
-    //
-
-    #[test]
-    fn test_modend_no_start_succeeds() {
-        let rec = Record{
-            rectype: RecordType::ModEnd,
-            data: &vec![0x00],  
-        };
-
-        if let Ok(rec) = OmfModend::new(&rec) {
-            assert_eq!(rec.modtype, 0x00);
-            assert_eq!(rec.enddata, None);
-            assert_eq!(rec.frame, None);
-            assert_eq!(rec.target, None);
-            assert_eq!(rec.displ, None);
-            assert_eq!(rec.is32, false);
-        } else {
-            assert!(false, "parse of valid MODEND fails");
-        }
-    }
-
-    #[test]
-    fn test_modend_errors_on_bad_type() {
-        let rec = Record{
-            rectype: RecordType::SegDef,
-            data: &vec![0x00],
-        };
-
-        if let Ok(_) = OmfModend::new(&rec) {
-            assert!(false, "parse of invalid MODEND succeeded")
-        }
+    fn test_uint_returns_long() {
+        let bytes = [0x78, 0x56, 0x34, 0x12];
+        assert_eq!(Parser::uint(&bytes), 0x12345678);
     }
 
     //
-    // Coment
+    // parser basics
     //
-
     #[test]
-    fn test_coment_type_and_class_parsed_correctly() {
-        let rec = Record{
-            rectype: RecordType::Comment,
-            data: &vec![0x80, 0x30],
-        };
+    fn test_empty_parser_returns_none() {
+        let obj = vec![];
+        let mut parser = Parser::new(obj);
 
-        let mut parser = RecordParser::new(&rec);
-
-        if let Ok(coment) = Coment::new(&mut parser) {
-            assert_eq!(coment.comtype, 0x80);
-            assert_eq!(coment.class, CommentClass::Unknown{ typ: 0x30 });
-        } else {
-            assert!(false, "parse of valid COMENT failed");
-        }
+        let p = parser.next();
+        assert!(p.is_ok(), "parser returned error {:x?}", p);
+        assert_eq!(p.unwrap(), Record::None);
     }
 
     #[test]
-    fn test_coment_fails_on_bounds() {
-        let rec = Record{
-            rectype: RecordType::Comment,
-            data: &vec![0x80],
-        };
+    fn test_truncated_header_returns_error() {
+        let obj = vec![0x42, 0x00];
+        let mut parser = Parser::new(obj);
 
-        let mut parser = RecordParser::new(&rec);
-
-        if let Ok(_) = Coment::new(&mut parser) {
-            assert!(false, "parsing truncated COMENT record succeeded");
-        }
+        let p = parser.next();
+        assert!(p.is_err());
     }
 
     #[test]
-    fn test_parse_coment_lib_succeeds() {
-        let rec = Record{
-            rectype: RecordType::Comment,
-            data: &vec![0x80, 0x9f, 0x41, 0x42, 0x43],
-        };
+    fn test_undefined_rectype_returns_unknown() {
+        let obj = vec![0x42, 0x00, 0x00, 0x00];
+        let mut parser = Parser::new(obj);
 
-        if let Ok(lib) = OmfComentLib::new(&rec) {
-            assert_eq!(lib.com.comtype, 0x80);
-            assert_eq!(lib.com.class, CommentClass::DefaultLibrary);
-            assert_eq!(lib.path, "ABC".to_string());
-        } else {
-            assert!(false, "parsing valid COMENT LIB failed");
-        }
+        let p = parser.next();
+        assert!(p.is_ok(), "parser returned error {:?}", p);
+        assert_eq!(p.unwrap(), Record::Unknown{ rectype: 0x42 });
     }
 
     #[test]
-    fn test_parse_truncated_coment_lib_fails() {
-        let rec = Record{
-            rectype: RecordType::Comment,
-            data: &vec![0x80, 0x9f],
-        };
+    fn test_bad_checksum_fails() {
+        let obj = vec![
+            0x80, 0x0e, 0x00, 0x0c,  0x64, 0x6f, 0x73, 0x5c, 
+            0x63, 0x72, 0x74, 0x30,  0x2e, 0x61, 0x73, 0x6d, 
+            0xdd];
+        let mut parser = Parser::new(obj);
 
-        if let Ok(_) = OmfComentLib::new(&rec) {
-            assert!(false, "parsing truncated COMENT LIB succeeded");
-        } 
+        assert!(parser.next().is_err());
     }
 
     #[test]
-    fn test_parse_coment_memory_model_succeeds() {
-        let rec = Record{
-            rectype: RecordType::Comment,
-            data: &vec![0x80, 0x9d, 0x33, 0x4f, 0x73],
-        };
+    fn test_truncated_record_fails() {
+        let obj = vec![
+            0x80, 0x0e, 0x00, 0x0c,  0x64, 0x6f, 0x73, 0x5c, 
+            0xdc];
+        let mut parser = Parser::new(obj);
 
-        if let Ok(lib) = OmfComentMemoryModel::new(&rec) {
-            assert_eq!(lib.com.comtype, 0x80);
-            assert_eq!(lib.com.class, CommentClass::MemoryModel);
-            assert_eq!(lib.model, "3Os".to_string());
-        } else {
-            assert!(false, "parsing valid COMENT memory model failed");
-        }
-    }
-
-    #[test]
-    fn test_parse_truncated_coment_memory_model_fails() {
-        let rec = Record{
-            rectype: RecordType::Comment,
-            data: &vec![0x80, 0x9d],
-        };
-
-        if let Ok(_) = OmfComentMemoryModel::new(&rec) {
-            assert!(false, "parsing truncated COMENT memory model succeeded");
-        } 
-    }
-
-    #[test]
-    fn test_parse_coment_dos_version_succeeds() {
-        let rec = Record{
-            rectype: RecordType::Comment,
-            data: &vec![0x80, 0x9c, 0x33, 0x30],
-        };
-
-        if let Ok(lib) = OmfComentDosVersion::new(&rec) {
-            assert_eq!(lib.com.comtype, 0x80);
-            assert_eq!(lib.com.class, CommentClass::DosVersion);
-            assert_eq!(lib.version, "30".to_string());
-        } else {
-            assert!(false, "parsing valid COMENT DOS version failed");
-        }
-    }
-
-    #[test]
-    fn test_parse_truncated_coment_dos_version_fails() {
-        let rec = Record{
-            rectype: RecordType::Comment,
-            data: &vec![0x80, 0x9c],
-        };
-
-        if let Ok(_) = OmfComentDosVersion::new(&rec) {
-            assert!(false, "parsing truncated COMENT DOS version succeeded");
-        } 
-    }
-
-    #[test]
-    fn test_lnames_parses_names() {
-        let rec = Record{
-            rectype: RecordType::LNames,
-            data: &vec![0x03, 0x41, 0x42, 0x43, 0x03, 0x44, 0x45, 0x46],
-        };
-
-        let lnames = OmfLnames::new(&rec);
-        if let Ok(names) = lnames {
-            assert_eq!(names.names, vec!["ABC".to_string(), "DEF".to_string()]);
-        } else {
-            assert!(false, "failed to parse valid lnames data");
-        }
-    }
-
-    #[test]
-    fn test_lnames_errors_on_bad_type() {
-        let rec = Record{
-            rectype: RecordType::SegDef,
-            data: &vec![0x03, 0x41, 0x42, 0x43, 0x03, 0x44, 0x45, 0x46],
-        };
-
-        let lnames = OmfLnames::new(&rec);
-        if let Ok(_) = lnames {
-            assert!(false, "succeeded parsing lnames with bad record type");
-        }
-    }
-
-    #[test]
-    fn test_lnames_errors_on_truncation() {
-        let rec = Record{
-            rectype: RecordType::LNames,
-            data: &vec![0x03, 0x41, 0x42, 0x43, 0x03, 0x44, 0x45],
-        };
-
-        let lnames = OmfLnames::new(&rec);
-        if let Ok(_) = lnames {
-            assert!(false, "succeeded parsing lnames with truncated data");
-        }
-    }
-
-    #[test]
-    fn test_segdef_parses_segdef() {
-        let rec = Record{
-            rectype: RecordType::SegDef,
-            data: &vec![
-                0b00101000,     // ACBP: byte aligned, public
-                0x23, 0x01,     // length 0x0123
-                4,              // segment name index
-                5,              // class name index
-                6,              // overlay name index
-            ],
-        };
-
-        let segdef = OmfSegdef::new(&rec);
-        if let Ok(segdef) = segdef {
-            assert_eq!(segdef.omfsegs.len(), 1);
-            let def = &segdef.omfsegs[0];
-
-            assert_eq!(def.use32, false);
-            assert_eq!(def.align, Align::Byte);
-            assert_eq!(def.combine, Combine::Public);
-            if let Some(_) = def.frame { assert!(false, "segment should not have a frame"); }
-            if let Some(_) = def.offset { assert!(false, "segment should not have an offset"); }
-            assert_eq!(def.length, 0x0123);
-            assert_eq!(def.name, 4);
-            assert_eq!(def.class, 5);
-            assert_eq!(def.overlay, 6);
-        } else {
-            assert!(false, "failed to parse valid segdef");
-        }
-    }
-
-    #[test]
-    fn test_segdef_parses_mutliple_defs() {
-        let rec = Record{
-            rectype: RecordType::SegDef,
-            data: &vec![
-                0b00101000,     // ACBP: byte aligned, public
-                0x23, 0x01,     // length 0x0123
-                4,              // segment name index
-                5,              // class name index
-                6,              // overlay name index
-                0b01000000,     // ACBP: word aligned, private
-                0xdc, 0x00,     // length 0x00dc
-                7,              // segment name index
-                8,              // class name index
-                9,              // overlay name index
-            ],
-        };
-
-        let segdef = OmfSegdef::new(&rec);
-        if let Ok(segdef) = segdef {
-            assert_eq!(segdef.omfsegs.len(), 2);
-            let def = &segdef.omfsegs[0];
-
-            assert_eq!(def.use32, false);
-            assert_eq!(def.align, Align::Byte);
-            assert_eq!(def.combine, Combine::Public);
-            if let Some(_) = def.frame { assert!(false, "segment should not have a frame"); }
-            if let Some(_) = def.offset { assert!(false, "segment should not have an offset"); }
-            assert_eq!(def.length, 0x0123);
-            assert_eq!(def.name, 4);
-            assert_eq!(def.class, 5);
-            assert_eq!(def.overlay, 6);
-
-            let def = &segdef.omfsegs[1];
-
-            assert_eq!(def.use32, false);
-            assert_eq!(def.align, Align::Word);
-            assert_eq!(def.combine, Combine::Private);
-            if let Some(_) = def.frame { assert!(false, "segment should not have a frame"); }
-            if let Some(_) = def.offset { assert!(false, "segment should not have an offset"); }
-            assert_eq!(def.length, 0x00dc);
-            assert_eq!(def.name, 7);
-            assert_eq!(def.class, 8);
-            assert_eq!(def.overlay, 9);
-        } else {
-            assert!(false, "failed to parse valid segdef");
-        }
-    }
-
-    #[test]
-    fn test_segdef_parses_absolute_segment() {
-        let rec = Record{
-            rectype: RecordType::SegDef,
-            data: &vec![
-                0b00010100,     // ACBP: absolute, stack
-                0x56, 0x78,     // frame
-                0xdd,           // offset
-                0x23, 0x01,     // length 0x0123
-                4,              // segment name index
-                5,              // class name index
-                6,              // overlay name index
-            ],
-        };
-
-        let segdef = OmfSegdef::new(&rec);
-        if let Ok(segdef) = segdef {
-            assert_eq!(segdef.omfsegs.len(), 1);
-            let def = &segdef.omfsegs[0];
-
-            assert_eq!(def.align, Align::Absolute);
-            assert_eq!(def.combine, Combine::Stack);
-
-            if let Some(frame) = def.frame {
-                assert_eq!(frame, 0x7856);
-            } else { 
-                assert!(false, "segment should have a frame"); 
-            }
-
-            if let Some(offset) = def.offset {
-                assert_eq!(offset, 0xdd);
-            } else { 
-                assert!(false, "segment should not have an offset"); 
-            }
-
-            assert_eq!(def.use32, false);
-            assert_eq!(def.length, 0x0123);
-            assert_eq!(def.name, 4);
-            assert_eq!(def.class, 5);
-            assert_eq!(def.overlay, 6);
-        } else {
-            assert!(false, "failed to parse valid segdef");
-        }
-    }
-
-    #[test]
-    fn test_segdef_validates_alignment() {
-        let rec = Record{
-            rectype: RecordType::SegDef,
-            data: &vec![
-                0b11101000,     // ACBP: invalid alignment, public
-                0x23, 0x01,     // length 0x0123
-                4,              // segment name index
-                5,              // class name index
-                6,              // overlay name index
-            ],
-        };
-
-        let segdef = OmfSegdef::new(&rec);
-        if let Ok(_) = segdef {
-            assert!(false, "did not fail on invalid alignment");
-        } 
-    }
-
-    #[test]
-    fn test_segdef_validates_combination() {
-        let rec = Record{
-            rectype: RecordType::SegDef,
-            data: &vec![
-                0b00100100,     // ACBP: byte alignment, invalid combination
-                0x23, 0x01,     // length 0x0123
-                4,              // segment name index
-                5,              // class name index
-                6,              // overlay name index
-            ],
-        };
-
-        let segdef = OmfSegdef::new(&rec);
-        if let Ok(_) = segdef {
-            assert!(false, "did not fail on invalid combination");
-        } 
-    }
-
-    #[test]
-    fn test_segdef_fails_on_bounds() {
-        let rec = Record{
-            rectype: RecordType::SegDef,
-            data: &vec![
-                0b00100100,     // ACBP: byte alignment, invalid combination
-                0x23, 0x01,     // length 0x0123
-                4,              // segment name index
-                5,              // class name index
-                // missing overlay
-            ],
-        };
-
-        let segdef = OmfSegdef::new(&rec);
-        if let Ok(_) = segdef {
-            assert!(false, "did not fail on truncated record");
-        } 
-    }
-
-    #[test]
-    fn test_segdef_fails_on_bad_type() {
-        let rec = Record{
-            rectype: RecordType::LNames,
-            data: &vec![
-                0b00100100,     // ACBP: byte alignment, invalid combination
-                0x23, 0x01,     // length 0x0123
-                4,              // segment name index
-                5,              // class name index
-                6,              // overlay name index
-            ],
-        };
-
-        let segdef = OmfSegdef::new(&rec);
-        if let Ok(_) = segdef {
-            assert!(false, "did not fail on truncated record");
-        } 
-    }
-
-
-    #[test]
-    fn test_segdef_handles_big_bit() {
-        let rec = Record{
-            rectype: RecordType::SegDef,
-            data: &vec![
-                0b00101010,     // ACBP: byte alignment, public, big
-                0x00, 0x00,     // length 0
-                4,              // segment name index
-                5,              // class name index
-                6,              // overlay name index
-            ],
-        };
-
-        if let Ok(segdef) = OmfSegdef::new(&rec) {
-            assert_eq!(segdef.omfsegs.len(), 1);
-            let def = &segdef.omfsegs[0];
-
-            assert_eq!(def.align, Align::Byte);
-            assert_eq!(def.combine, Combine::Public);
-            if let Some(_) = def.frame { assert!(false, "segment should not have a frame"); }
-            if let Some(_) = def.offset { assert!(false, "segment should not have an offset"); }
-            assert_eq!(def.length, 0x10000);
-            assert_eq!(def.name, 4);
-            assert_eq!(def.class, 5);
-            assert_eq!(def.overlay, 6);
-        } else {
-            assert!(false, "failed to parse valid segdef");
-        }
-    }
-
-    #[test]
-    fn test_segdef_handles_use32_bit() {
-        let rec = Record{
-            rectype: RecordType::SegDef,
-            data: &vec![
-                0b00101001,     // ACBP: byte alignment, public, use32
-                0x12, 0x00,     // length 0x12
-                4,              // segment name index
-                5,              // class name index
-                6,              // overlay name index
-            ],
-        };
-
-        if let Ok(segdef) = OmfSegdef::new(&rec) {
-            assert_eq!(segdef.omfsegs.len(), 1);
-            let def = &segdef.omfsegs[0];
-
-            assert_eq!(def.use32, true);
-            assert_eq!(def.align, Align::Byte);
-            assert_eq!(def.combine, Combine::Public);
-            if let Some(_) = def.frame { assert!(false, "segment should not have a frame"); }
-            if let Some(_) = def.offset { assert!(false, "segment should not have an offset"); }
-            assert_eq!(def.length, 0x12);
-            assert_eq!(def.name, 4);
-            assert_eq!(def.class, 5);
-            assert_eq!(def.overlay, 6);
-        } else {
-            assert!(false, "failed to parse valid segdef");
-        }
-    }
-
-    #[test]
-    fn test_segdef_parses_32_bit_length() {
-        let rec = Record{
-            rectype: RecordType::SegDef32,
-            data: &vec![
-                0b00101000,     // ACBP: byte aligned, public
-                0x78, 0x56, 0x23, 0x01,     // length 0x01235678
-                4,              // segment name index
-                5,              // class name index
-                6,              // overlay name index
-            ],
-        };
-
-        let segdef = OmfSegdef::new(&rec);
-        if let Ok(segdef) = segdef {
-            assert_eq!(segdef.omfsegs.len(), 1);
-            let def = &segdef.omfsegs[0];
-
-            assert_eq!(def.use32, false);
-            assert_eq!(def.align, Align::Byte);
-            assert_eq!(def.combine, Combine::Public);
-            if let Some(_) = def.frame { assert!(false, "segment should not have a frame"); }
-            if let Some(_) = def.offset { assert!(false, "segment should not have an offset"); }
-            assert_eq!(def.length, 0x01235678);
-            assert_eq!(def.name, 4);
-            assert_eq!(def.class, 5);
-            assert_eq!(def.overlay, 6);
-        } else {
-            assert!(false, "failed to parse valid segdef");
-        }
-    }
-
-    #[test]
-    fn test_segdef_parses_32_bit_big_bit() {
-        let rec = Record{
-            rectype: RecordType::SegDef32,
-            data: &vec![
-                0b00101010,     // ACBP: byte aligned, public, big
-                0, 0, 0, 0,     // length 0
-                4,              // segment name index
-                5,              // class name index
-                6,              // overlay name index
-            ],
-        };
-
-        let segdef = OmfSegdef::new(&rec);
-        if let Ok(segdef) = segdef {
-            assert_eq!(segdef.omfsegs.len(), 1);
-            let def = &segdef.omfsegs[0];
-
-            assert_eq!(def.use32, false);
-            assert_eq!(def.align, Align::Byte);
-            assert_eq!(def.combine, Combine::Public);
-            if let Some(_) = def.frame { assert!(false, "segment should not have a frame"); }
-            if let Some(_) = def.offset { assert!(false, "segment should not have an offset"); }
-            assert_eq!(def.length, 1u64 << 32);
-            assert_eq!(def.name, 4);
-            assert_eq!(def.class, 5);
-            assert_eq!(def.overlay, 6);
-        } else {
-            assert!(false, "failed to parse valid segdef");
-        }
+        assert!(parser.next().is_err());
     }
 
     //
-    // Grpdef
+    // THEADR
+    //
+    #[test]
+    fn test_theadr_succeeds() {
+        let obj = vec![
+            0x80, 0x0e, 0x00, 0x0c,  0x64, 0x6f, 0x73, 0x5c, 
+            0x63, 0x72, 0x74, 0x30,  0x2e, 0x61, 0x73, 0x6d, 
+            0xdc];
+        let mut parser = Parser::new(obj);
+
+        match parser.next() {
+            Ok(Record::THEADR{ name }) => assert_eq!(name, "dos\\crt0.asm"),
+            x => assert!(false, "parser returned {:x?}", x),
+        };
+    }
+
+    //
+    // LNAMES
+    //
+    #[test]
+    fn test_lnames_succeeds() {
+        let obj = vec![
+            0x96, 0x09, 0x00, 0x03,  0x41, 0x42, 0x43, 0x03, 
+            0x44, 0x45, 0x46, 0x00];
+        let mut parser = Parser::new(obj);
+
+        match parser.next() {
+            Ok(Record::LNAMES{ names }) => {
+                assert_eq!(names.len(), 2);
+                assert_eq!(names[0], "ABC");
+                assert_eq!(names[1], "DEF");
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        };
+    }
+
+    //
+    // SEGDEF
+    //
+    #[test]
+    fn test_segdef_relocatable_succeeds() {
+        let obj = vec![
+            0x98, 0x0d, 0x00,
+            0b01001000, 0x34, 0x12, 0x01, 0x02, 0x03,
+            0b01100011, 0x00, 0x00, 0x05, 0x06, 0x00,
+            0x00];
+        let mut parser = Parser::new(obj);
+
+        match parser.next() {
+            Ok(Record::SEGDEF{ segs }) => {
+                assert_eq!(segs.len(), 2);
+                assert_eq!(segs[0], Segdef{
+                    align: Align::Word,
+                    combine: Combine::Public,
+                    use32: false,
+                    abs: None,
+                    length: 0x1234,
+                    class: Some(1),
+                    name: Some(2),
+                    overlay: Some(3),                
+                });
+                assert_eq!(segs[1], Segdef{
+                    align: Align::Paragraph,
+                    combine: Combine::Private,
+                    use32: true,
+                    abs: None,
+                    length: 0x10000,
+                    class: Some(5),
+                    name: Some(6),
+                    overlay: None,                
+                });
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        };
+    }
+
+    #[test]
+    fn test_segdef_absolute_succeeds() {
+        let obj = vec![
+            0x98, 0x0a, 0x00,
+            0b00011000, 0xee, 0xff, 0x73, 0x34, 0x12, 0x01, 0x02, 0x03,
+            0x00];
+        let mut parser = Parser::new(obj);
+
+        match parser.next() {
+            Ok(Record::SEGDEF{ segs }) => {
+                assert_eq!(segs.len(), 1);
+                assert_eq!(segs[0], Segdef{
+                    align: Align::Absolute,
+                    combine: Combine::Common,
+                    use32: false,
+                    abs: Some(AbsoluteSeg {
+                        frame: 0xffee,
+                        offset: 0x73,
+                    }),
+                    length: 0x1234,
+                    class: Some(1),
+                    name: Some(2),
+                    overlay: Some(3),                
+                });
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        };
+    }
+
+    #[test]
+    fn test_segdef_32_bit_succeeds() {
+        let obj = vec![
+            0x99, 0x1c, 0x00,
+            0b10011000, 0x78, 0x56, 0x34, 0x12, 0x01, 0x02, 0x03,
+            0b00010100, 0xee, 0xff, 0x73, 0x78, 0x56, 0x34, 0x12, 0x01, 0x02, 0x03,
+            0b10011010, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03,
+            0x00];
+        let mut parser = Parser::new(obj);
+
+        match parser.next() {
+            Ok(Record::SEGDEF{ segs }) => {
+                assert_eq!(segs.len(), 3);
+                assert_eq!(segs[0], Segdef{
+                    align: Align::Page,
+                    combine: Combine::Common,
+                    use32: false,
+                    abs: None,
+                    length: 0x12345678,
+                    class: Some(1),
+                    name: Some(2),
+                    overlay: Some(3),                
+                });
+                assert_eq!(segs[1], Segdef{
+                    align: Align::Absolute,
+                    combine: Combine::Stack,
+                    use32: false,
+                    abs: Some(AbsoluteSeg {
+                        frame: 0xffee,
+                        offset: 0x73,
+                    }),
+                    length: 0x12345678,
+                    class: Some(1),
+                    name: Some(2),
+                    overlay: Some(3),                
+                });
+                assert_eq!(segs[2], Segdef{
+                    align: Align::Page,
+                    combine: Combine::Common,
+                    use32: false,
+                    abs: None,
+                    length: 0x1_0000_0000,
+                    class: Some(1),
+                    name: Some(2),
+                    overlay: Some(3),                
+                });
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        };
+    }
+
+    //
+    // GRPDEF
     //
     #[test]
     fn test_grpdef_succeeds() {
-        let rec = Record {
-            rectype: RecordType::GrpDef,
-            data: &vec![0x02, 0xff, 0x01, 0xff, 0x02],
-        };
+        let obj = vec![
+            0x9a, 0x07, 0x00,
+            0x81, 0x23, 0xff, 0x01, 0xff, 0x02,
+            0x00];
 
-        if let Ok(rec) = OmfGrpdef::new(&rec) {
-            assert_eq!(rec.name, 2);
-            assert_eq!(rec.segs.len(), 2);
-            assert_eq!(rec.segs[0], 1);
-            assert_eq!(rec.segs[1], 2);
-        } else {
-            assert!(false, "failed to parse valid grpdef");
+        let mut parser = Parser::new(obj);
+
+        match parser.next() {
+            Ok(Record::GRPDEF{ name, segs }) => {
+                assert_eq!(name, 0x0123);
+                assert_eq!(segs, vec![1, 2]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
         }
     }
 
-    #[test]
-    fn test_grpdef_errors_on_bad_type() {
-        let rec = Record {
-            rectype: RecordType::SegDef,
-            data: &vec![0x02, 0xff, 0x01, 0xff, 0x02],
-        };
-
-        assert!(OmfGrpdef::new(&rec).is_err());
-    }
-
-    #[test]
-    fn test_grpdef_errors_on_bad_element_type() {
-        let rec = Record {
-            rectype: RecordType::GrpDef,
-            data: &vec![0x02, 0xfe, 0x01],
-        };
-
-        assert!(OmfGrpdef::new(&rec).is_err());
-    }
-
-    #[test]
-    fn test_grpdef_errors_on_truncation() {
-        let rec = Record {
-            rectype: RecordType::GrpDef,
-            data: &vec![0x02, 0xff, 0x01, 0xff],
-        };
-
-        assert!(OmfGrpdef::new(&rec).is_err());
-    }
-
-    #[test]
-    fn test_grpdef_errors_on_no_segments() {
-        let rec = Record {
-            rectype: RecordType::GrpDef,
-            data: &vec![0x02],
-        };
-
-        assert!(OmfGrpdef::new(&rec).is_err());
-    }
-
     //
-    // Extdef
+    // EXTDEF
     //
-
     #[test]
     fn test_extdef_succeeds() {
-        let rec = Record {
-            rectype: RecordType::ExtDef,
-            data: &vec![
-                0x03, 0x41, 0x42, 0x43, 0x01,
-                0x04, 0x44, 0x45, 0x46, 0x47, 0x81, 0x02,
-            ],
-        };
+        let obj = vec![
+            0x8c, 0x0b, 0x00,
+            0x03, 0x41, 0x42, 0x43, 0x01,
+            0x03, 0x44, 0x45, 0x46, 0x02,
+            0x00];
 
-        if let Ok(rec) = OmfExtdef::new(&rec) {
-            assert_eq!(rec.externs.len(), 2);
-            
-            let ext = &rec.externs[0];
-            assert_eq!(ext.name, "ABC");
-            assert_eq!(ext.typindex, 1);
+        let mut parser = Parser::new(obj);
 
-            let ext = &rec.externs[1];
-            assert_eq!(ext.name, "DEFG");
-            assert_eq!(ext.typindex, 0x0102);
-        } else {
-            assert!(false, "parse of valid EXTDEF failed");
-        }
-    }
-
-    #[test]
-    fn test_extdef_errors_on_bad_type() {
-        let rec = Record{
-            rectype: RecordType::SegDef,
-            data: &vec![
-                0x03, 0x41, 0x42, 0x43, 0x01,
-            ],
-        };
-
-        if let Ok(_) = OmfExtdef::new(&rec) {
-            assert!(false, "parse suceeded with invalid record type");    
-        }
-    }
-    
-    #[test]
-    fn test_extdef_errors_on_truncation() {
-        let rec = Record{
-            rectype: RecordType::ExtDef,
-            data: &vec![
-                0x03, 0x41, 0x42, 0x43,
-            ],
-        };
-
-        if let Ok(_) = OmfExtdef::new(&rec) {
-            assert!(false, "parse suceeded with truncated record");    
+        match parser.next() {
+            Ok(Record::EXTDEF{ externs }) => {
+                assert_eq!(
+                    externs,
+                    vec![
+                        Extern{ name: "ABC".to_string(), typeidx: 1},
+                        Extern{ name: "DEF".to_string(), typeidx: 2},
+                    ]
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
         }
     }
 
     //
-    // Pubdef
+    // PUBDEF
     //
     #[test]
     fn test_pubdef_succeeds() {
-        let rec = Record{
-            rectype: RecordType::PubDef,
-            data: &vec![
-                0x01,       // base group
-                0x02,       // base segment
-                0x03, 0x41, 0x42, 0x43, 0x34, 0x12, 0x00,
-                0x03, 0x44, 0x45, 0x46, 0x78, 0x56, 0x81, 0x02,
-            ],
-        };
+        let obj = vec![
+            0x90, 0x0c, 0x00,
+            0x00, 0x01, 
+            0x05, 0x47, 0x41, 0x4d, 0x4d, 0x41,
+            0x02, 0x00, 0x00,
+            0xf9];
 
-        if let Ok(rec) = OmfPubdef::new(&rec) {
-            assert_eq!(rec.base_group, Some(1));
-            assert_eq!(rec.base_seg, Some(2));
-            assert!(rec.base_frame.is_none());
-            
-            assert_eq!(rec.publics.len(), 2);
-            
-            let public = &rec.publics[0];
-            assert_eq!(public.name, "ABC");
-            assert_eq!(public.offset, 0x1234);
-            assert_eq!(public.typindex, 0);
+        let mut parser = Parser::new(obj);
 
-            let public = &rec.publics[1];
-            assert_eq!(public.name, "DEF");
-            assert_eq!(public.offset, 0x5678);
-            assert_eq!(public.typindex, 0x0102);
-
-        } else {
-            assert!(false, "parse of valid PUBDEF failed");
+        match parser.next() {
+            Ok(Record::PUBDEF{ group, seg, frame, publics }) => {
+                assert_eq!(group, None);
+                assert_eq!(seg, Some(1));
+                assert_eq!(frame, None);
+                assert_eq!(
+                    publics,
+                    vec![
+                        Public{ name: "GAMMA".to_string(), offset: 2, typeidx: 0},
+                    ]
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
         }
     }
 
     #[test]
-    fn test_pubdef_fails_on_truncated_record() {
-        let rec = Record{
-            rectype: RecordType::PubDef,
-            data: &vec![
-                0x01,       // base group
-            ],
-        };
+    fn test_pubdef_with_frame_succeeds() {
+        let obj = vec![
+            0x90, 0x0e, 0x00,
+            0x00, 0x00, 0x00, 0xf0, 
+            0x05, 0x47, 0x41, 0x4d, 0x4d, 0x41,
+            0x34, 0x02, 0x00,
+            0x00];
 
-        assert!(!OmfPubdef::new(&rec).is_ok());        
-    }
+        let mut parser = Parser::new(obj);
 
-    #[test]
-    fn test_pubdef_fails_on_no_publics() {
-        let rec = Record{
-            rectype: RecordType::PubDef,
-            data: &vec![
-                0x01,       // base group
-                0x02,       // base segment
-            ],
-        };
-
-        assert!(!OmfPubdef::new(&rec).is_ok());        
-    }
-
-    #[test]
-    fn test_pubdef_fails_on_bad_type() {
-        let rec = Record{
-            rectype: RecordType::ExtDef,
-            data: &vec![
-                0x01,       // base group
-                0x02,       // base segment
-                0x03, 0x41, 0x42, 0x43, 0x34, 0x12, 0x00,
-            ],
-        };
-
-        assert!(!OmfPubdef::new(&rec).is_ok());        
-    }
-
-    #[test]
-    fn test_pubdef_parses_absolute_frame() {
-        let rec = Record{
-            rectype: RecordType::PubDef,
-            data: &vec![
-                0x00,       // base group
-                0x00,       // base segment
-                0xaa, 0x55, // absolute frame
-                0x03, 0x41, 0x42, 0x43, 0x34, 0x12, 0x00,
-            ],
-        };
-
-        if let Ok(rec) = OmfPubdef::new(&rec) {
-            assert_eq!(rec.base_group, None);
-            assert_eq!(rec.base_seg, None);
-            assert!(!rec.base_frame.is_none());
-            assert_eq!(rec.base_frame.unwrap(), 0x55aa);
-            
-            assert_eq!(rec.publics.len(), 1);
-            
-            let public = &rec.publics[0];
-            assert_eq!(public.name, "ABC");
-            assert_eq!(public.offset, 0x1234);
-            assert_eq!(public.typindex, 0);
-
-        } else {
-            assert!(false, "parse of valid PUBDEF failed");
+        match parser.next() {
+            Ok(Record::PUBDEF{ group, seg, frame, publics }) => {
+                assert_eq!(group, None);
+                assert_eq!(seg, None);
+                assert_eq!(frame, Some(0xf000));
+                assert_eq!(
+                    publics,
+                    vec![
+                        Public{ name: "GAMMA".to_string(), offset: 0x234, typeidx: 0},
+                    ]
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
         }
     }
 
     #[test]
-    fn test_pubdef_parses_32_bit_offset() {
-        let rec = Record{
-            rectype: RecordType::PubDef32,
-            data: &vec![
-                0x01,       // base group
-                0x02,       // base segment
-                0x03, 0x41, 0x42, 0x43, 0x78, 0x56, 0x34, 0x12, 0x3c,
-            ],
-        };
+    fn test_pubdef_with_32_bit_offset_succeeds() {
+        let obj = vec![
+            0x91, 0x0e, 0x00,
+            0x02, 0x00, 
+            0x05, 0x47, 0x41, 0x4d, 0x4d, 0x41,
+            0x78, 0x56, 0x34, 0x02, 0x00,
+            0x00];
 
-        if let Ok(rec) = OmfPubdef::new(&rec) {
-            assert_eq!(rec.base_group, Some(1));
-            assert_eq!(rec.base_seg, Some(2));
-            assert!(rec.base_frame.is_none());
-            
-            assert_eq!(rec.publics.len(), 1);
-            
-            let public = &rec.publics[0];
-            assert_eq!(public.name, "ABC");
-            assert_eq!(public.offset, 0x12345678);
-            assert_eq!(public.typindex, 0x3c);
+        let mut parser = Parser::new(obj);
 
-        } else {
-            assert!(false, "parse of valid PUBDEF failed");
+        match parser.next() {
+            Ok(Record::PUBDEF{ group, seg, frame, publics }) => {
+                assert_eq!(group, Some(2));
+                assert_eq!(seg, None);
+                assert_eq!(frame, None);
+                assert_eq!(
+                    publics,
+                    vec![
+                        Public{ name: "GAMMA".to_string(), offset: 0x2345678, typeidx: 0},
+                    ]
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    //
+    // MODEND
+    //
+    #[test]
+    fn test_modend_succeeds() {
+        let obj = vec![
+            0x8a, 0x02, 0x00, 0x01, 0x73];
+
+        let mut parser = Parser::new(obj);
+
+        match parser.next() {
+            Ok(Record::MODEND{ main, start_address }) => {
+                assert_eq!(main, false);
+                assert_eq!(start_address, None);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_modend_with_main_succeeds() {
+        let obj = vec![
+            0x8a, 0x02, 0x00, 0x81, 0x00];
+
+        let mut parser = Parser::new(obj);
+
+        match parser.next() {
+            Ok(Record::MODEND{ main, start_address }) => {
+                assert_eq!(main, true);
+                assert_eq!(start_address, None);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_modend_with_start_addr_succeeds() {
+        let obj = vec![
+            0x8a, 0x07, 0x00, 
+            0xc1, 0x00, 0x01, 0x02, 0x34, 0x12, 0x00
+        ];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::MODEND{ main, start_address }) => {
+                assert_eq!(main, true);
+                match start_address {
+                    None => assert!(false, "modend missing start address"),
+                    Some(sa) => {
+                        assert_eq!(sa.fix_data, 0);
+                        assert_eq!(sa.frame_datum, Some(1));
+                        assert_eq!(sa.target_datum, Some(2));
+                        assert_eq!(sa.target_disp, Some(0x1234));
+                    },
+                }
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_modend_32_bits_with_start_addr_succeeds() {
+        let obj = vec![
+            0x8b, 0x09, 0x00, 
+            0xc1, 0x00, 0x01, 0x02, 0x78, 0x56, 0x34, 0x12, 0x00
+        ];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::MODEND{ main, start_address }) => {
+                assert_eq!(main, true);
+                match start_address {
+                    None => assert!(false, "modend missing start address"),
+                    Some(sa) => {
+                        assert_eq!(sa.fix_data, 0);
+                        assert_eq!(sa.frame_datum, Some(1));
+                        assert_eq!(sa.target_datum, Some(2));
+                        assert_eq!(sa.target_disp, Some(0x12345678));
+                    },
+                }
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    //
+    // COMENT
+    //
+    #[test]
+    pub fn test_coment_translator_succeeds() {
+        let obj = vec![
+            0x88, 0x09, 0x00,
+            0x00, 0x00,
+            0x41, 0x42, 0x43, 0x44, 0x45, 0x46,
+            0x00];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::COMENT{ header, coment }) => {
+                assert!(!header.nopurge());
+                assert!(!header.nolist());
+
+                match coment {
+                    Coment::Translator{ text } => assert_eq!(text, "ABCDEF"),
+                    x => assert!(false, "coment parsed was {:?}", x),
+                }
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+
+        }
+    }
+
+    #[test]
+    pub fn test_coment_new_omf_succeeds() {
+        let obj = vec![
+            0x88, 0x06, 0x00,
+            0xc0, 0xa1,
+            0x6e, 0x43, 0x56,
+            0x00];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::COMENT{ header, coment }) => {
+                assert!(header.nopurge());
+                assert!(header.nolist());
+
+                match coment {
+                    Coment::NewOMF{ text } => assert_eq!(text, "nCV"),
+                    x => assert!(false, "coment parsed was {:?}", x),
+                }
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+
+        }
+    }
+
+    #[test]
+    pub fn test_coment_memory_model_succeeds() {
+        let obj = vec![
+            0x88, 0x05, 0x00,
+            0x80, 0x9d,
+            0x30, 0x6c,
+            0x00];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::COMENT{ header, coment }) => {
+                assert!(header.nopurge());
+                assert!(!header.nolist());
+
+                match coment {
+                    Coment::MemoryModel{ text } => assert_eq!(text, "0l"),
+                    x => assert!(false, "coment parsed was {:?}", x),
+                }
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+
+        }
+    }
+
+    #[test]
+    pub fn test_coment_default_library_succeeds() {
+        let obj = vec![
+            0x88, 0x06, 0x00,
+            0x40, 0x9f,
+            0x41, 0x43, 0x45,
+            0x00];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::COMENT{ header, coment }) => {
+                assert!(!header.nopurge());
+                assert!(header.nolist());
+
+                match coment {
+                    Coment::DefaultLibrary{ name } => assert_eq!(name, "ACE"),
+                    x => assert!(false, "coment parsed was {:?}", x),
+                }
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    //
+    // LEDATA
+    //
+    #[test]
+    fn test_ledata_succeeds() {
+        let obj = vec![
+            0xa0, 0x09, 0x00, 
+            0x01, 
+            0x34, 0x12, 
+            0x02, 0x78, 0x56, 0x34, 0x12, 
+            0x00
+        ];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::LEDATA{ seg, offset, data }) => {
+                assert_eq!(seg, 1);
+                assert_eq!(offset, 0x1234);
+                assert_eq!(data, vec![0x02, 0x78, 0x56, 0x34, 0x12]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_ledata32_succeeds() {
+        let obj = vec![
+            0xa1, 0x0b, 0x00, 
+            0x01, 
+            0x78, 0x56, 0x34, 0x12, 
+            0x02, 0x78, 0x56, 0x34, 0x12, 
+            0x00
+        ];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::LEDATA{ seg, offset, data }) => {
+                assert_eq!(seg, 1);
+                assert_eq!(offset, 0x12345678);
+                assert_eq!(data, vec![0x02, 0x78, 0x56, 0x34, 0x12]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
         }
     }
 }
-

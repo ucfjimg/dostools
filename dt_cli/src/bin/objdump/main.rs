@@ -1,14 +1,15 @@
 mod args;
 
+use std::str;
+
 use dt_lib::error::Error as AppError;
-use dt_lib::record::{Record, RecordType, CommentClass};
 use dt_lib::objfile::*;
 
 use crate::args::Args;
 
 struct Objdump {
     lnames: Vec<String>,
-    segments: Vec<OmfSegment>,
+    segments: Vec<Segdef>,
     externs: Vec<String>,
 }
 
@@ -16,22 +17,14 @@ impl Objdump {
     fn new() -> Objdump {
         Objdump {
             lnames: vec!["".to_string()],
-            segments: vec![OmfSegment::empty()],
+            segments: vec![Segdef::empty()],
             externs: vec!["".to_string()],
         }
     }
 
-    fn theadr(&self, rec: &Record) -> Result<(), AppError> {
-        let rec = OmfTheadr::new(rec)?;
-        println!("THEADR {}", rec.name);
-        Ok(())
-    }
-    
-    fn lnames(&mut self, rec: &Record) -> Result<(), AppError> {
-        let rec = OmfLnames::new(rec)?;
-
+    fn lnames(&mut self, names: &[String]) -> Result<(), AppError> {
         println!("LNAMES");
-        for name in rec.names.iter() {
+        for name in names.iter() {
             println!("{:5} {}", self.lnames.len(), name);
             self.lnames.push(name.clone());
         }
@@ -47,26 +40,33 @@ impl Objdump {
         }
     }
 
-    fn segdef(&mut self, rec: &Record) -> Result<(), AppError> {
-        let is32 = rec.rectype.is32();
-        let rec = OmfSegdef::new(rec)?;
+    fn opt_lname(&self, index: Option<usize>) -> &str {
+        match index {
+            Some(index) => self.lname(index),
+            None => "null",
+        }
+    }
 
-        println!("{}", if is32 { "SEGDEF32" } else { "SEGDEF" });
-        for seg in rec.omfsegs.iter() {
-            print!("{:5} {}.{}.{} {:?} {:?}",
+    fn segname(&self, seg: &Segdef) -> String {
+        format!("{}.{}.{}",
+            self.opt_lname(seg.class),
+            self.opt_lname(seg.name),
+            self.opt_lname(seg.overlay)
+        )
+    }
+
+    fn segdef(&mut self, segs: &[Segdef]) -> Result<(), AppError> {
+        println!("SEGDEF");
+        for seg in segs.iter() {
+            print!("{:5} {} {:?} {:?}",
                 self.segments.len(),
-                self.lname(seg.class),
-                self.lname(seg.name),
-                self.lname(seg.overlay),
+                self.segname(seg),
                 seg.align,
                 seg.combine,
             );
             
-            if let Some(frame) = seg.frame {
-                print!(" Frame=${:04x}", frame);
-                if let Some(offset) = seg.offset {
-                    print!(":{:04x}", offset);
-                }                
+            if let Some(abs) = &seg.abs {
+                print!(" Frame={:04x}:{:02x}", abs.frame, abs.offset);
             }
 
             if seg.use32 {
@@ -81,155 +81,181 @@ impl Objdump {
         Ok(())
     }
 
-    fn grpdef(&self, rec: &Record) -> Result<(), AppError> {
-        let rec = OmfGrpdef::new(rec)?;
+    fn grpdef(&self, name: usize, segs: &Vec<usize>) -> Result<(), AppError> {
+        println!("GRPDEF {}", self.lname(name));
 
-        println!("GRPDEF {}", self.lname(rec.name));
-
-        for segidx in rec.segs.iter() {
+        for segidx in segs.iter() {
             let seg = &self.segments[*segidx];
-            println!("      {}.{}.{}", 
-                self.lname(seg.class),
-                self.lname(seg.name),
-                self.lname(seg.overlay)
-            );
+            println!("      {}", self.segname(seg)); 
         }
         Ok(())
     }
 
-    fn extdef(&mut self, rec: &Record) -> Result<(), AppError> {
-        let rec = OmfExtdef::new(rec)?;
-
+    fn extdef(&mut self, externs: &[Extern]) -> Result<(), AppError> {
         println!("EXTDEF");
-        for ext in rec.externs.iter() {
-            println!("{:5} {}", self.externs.len(), ext.name);
+        for ext in externs.iter() {
+            println!("{:5} {} {}", self.externs.len(), ext.name, ext.typeidx);
             self.externs.push(ext.name.clone());
         }
         
         Ok(())
     }
 
-    fn pubdef(&self, rec: &Record) -> Result<(), AppError> {
-        let is32 = rec.rectype.is32();
-        let rec = OmfPubdef::new(rec)?;
+    fn pubdef(&self, group: Option<usize>, seg: Option<usize>, frame: Option<u16>, publics: &[Public]) -> Result<(), AppError> {
+        println!("PUBDEF");
 
-        print!("{}",
-            if is32 { "PUBDEF32"} else { "PUBDEF" }
-        );
-
-        if let Some(group) = rec.base_group {
+        if let Some(group) = group {
             print!(" GRP={}", self.lname(group));
         }
 
-        if let Some(seg) = rec.base_seg {
+        if let Some(seg) = seg {
             let seg = &self.segments[seg];
-            print!(" SEG={}.{}.{}", 
-                self.lname(seg.class),
-                self.lname(seg.name),
-                self.lname(seg.overlay)
-            );
+            print!(" SEG={}", self.segname(seg));
         }
 
-        if let Some(frame) = rec.base_frame {
+        if let Some(frame) = frame {
             print!(" FRAME=${:04x}", frame);
         }
 
         println!();
 
-        for public in rec.publics.iter() {
+        for public in publics {
             println!("      {:08x} {}", public.offset, public.name);
         }
 
         Ok(())
     }
 
-    fn modend(&self, rec: &Record) -> Result<(), AppError> {
-        let _rec = OmfModend::new(rec)?;
-
-        println!("MODEND");
-
-        Ok(())
-    }
-
-    fn coment_memory_model(&self, rec: &Record) -> Result<(), AppError> {
-        let lib = OmfComentMemoryModel::new(rec)?;
-
-        println!("COMENT MEMORY MODEL {}", lib.model);
-
-        Ok(())
-    }
-
-    fn coment_lib(&self, rec: &Record) -> Result<(), AppError> {
-        let lib = OmfComentLib::new(rec)?;
-
-        println!("COMENT LIBMOD {}", lib.path);
-
-        Ok(())
-    }
-
-    fn coment_dosver(&self, rec: &Record) -> Result<(), AppError> {
-        let ver = OmfComentDosVersion::new(rec)?;
-
-        println!("COMENT DOSVER {}", ver.version);
-
-        Ok(())
-    }
-
-
-    fn coment(&self, rec: &Record) -> Result<(), AppError> {
-        match Coment::comclass(rec)? {
-            CommentClass::DosVersion => self.coment_dosver(rec)?,
-            CommentClass::MemoryModel => self.coment_memory_model(rec)?,
-            CommentClass::DosSeg => println!("COMENT DOSSEG"),
-            CommentClass::DefaultLibrary => self.coment_lib(rec)?,
-            CommentClass::Unknown{typ} => {
-                println!("COMENT unknown {:02x}", typ);
-            },
-        } 
-
-        Ok(())
-    }
-
-    fn do_record(&mut self, rec: &Record) -> Result<(), AppError> {
-        match rec.rectype {
-            RecordType::THeader => self.theadr(rec),
-            RecordType::LNames => self.lnames(rec),
-            RecordType::SegDef | 
-            RecordType::SegDef32 => self.segdef(rec),
-            RecordType::GrpDef => self.grpdef(rec),
-            RecordType::ExtDef => self.extdef(rec),
-            RecordType::PubDef | 
-            RecordType::PubDef32 => self.pubdef(rec),
-            RecordType::ModEnd => self.modend(rec),
-            RecordType::Comment => self.coment(rec),
-            RecordType::Unknown{ typ } => Err(AppError::new(&format!("skipping unrecognized record {:02x}", typ))),
-            _ => {
-                println!("not yet supported {:?}", rec.rectype);
-                Ok(())
-            },
+    fn modend(&self, main: bool, start_address: Option<StartAddress> ) -> Result<(), AppError> {
+        print!("MODEND");
+        if main {
+            print!(" MAIN");
         }
+        println!();
+
+        if let Some(sa) = start_address {
+            print!("  Start address ");
+            if let Some(fmethod) = sa.fmethod()? {
+                print!("{:?}", fmethod);
+                if let Some(datum) = sa.frame_datum {
+                    print!(" datum {}", datum);
+                }
+            }
+
+            if let Some(tmethod) = sa.tmethod()? {
+                print!("{:?}", tmethod);
+                if let Some(datum) = sa.target_datum {
+                    print!(" datum {}", datum);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn coment(&self, header: ComentHeader, coment: &Coment) -> Result<(), AppError> {
+        print!("COMENT");
+        if header.nopurge() {
+            print!(" NOPURGE");
+        }
+        if header.nolist() {
+            print!(" NOLIST");
+        }
+        println!();
+
+        match coment {
+            Coment::Translator{ text } => println!("  Translator '{}'", text),
+            Coment::NewOMF{ text } => println!("  Debug style '{}'", text),
+            Coment::MemoryModel{ text } => println!("  Memory model '{}'", text),
+            Coment::DefaultLibrary{ name } => println!("  Default library '{}'", name),
+
+            x => println!("  Unknown comment class {:02x}", header.comclass),
+        }
+
+        Ok(())
+    }
+
+    fn ledata(&self, seg: usize, offset: u32, data: &[u8]) -> Result<(), AppError> {
+        let seg = &self.segments[seg];
+        println!("LEDATA {}", self.segname(seg));
+
+        let mut i = 0;
+
+        while i < data.len() {
+            const PERLINE: usize = 16;
+            
+            let mut left = data.len() - i;
+            if left > PERLINE {
+                left = PERLINE;
+            }
+
+            print!("{:08x}", offset as usize + i);
+            
+            let mut j = 0;
+
+            while j < left {
+                print!(" {:02x}", data[i+j]);
+                j += 1;
+            }
+
+            while j < PERLINE {
+                print!("   ");
+                j += 1;
+            }
+
+            print!(" |");
+
+            j = 0;
+            while j < left {
+                let ch = data[i+j];
+                if ch >= 0x20 && ch <= 0x7e {
+                    if let Ok(s) = str::from_utf8(&data[i+j..i+j+1]) {
+                        print!("{}", s);
+                    } else {
+                        print!("?");
+                    }
+                } else {
+                    print!(".");
+                }
+                j += 1;
+            }
+
+            while j < PERLINE {
+                print!(" ");
+                j += 1;
+            }
+
+            println!("|");
+
+            i += left;
+        }
+        Ok(())
     }
 }
 
 fn objdump() -> Result<(), AppError> {
     let args = Args::parse()?;
-    let mut obj = ObjFile::read(&args.libname)?;
+    let obj = std::fs::read(args.libname)?;
+    let mut obj = Parser::new(obj);
     let mut objdump = Objdump::new();
 
     loop {
         match obj.next()? {
-            Some(rec) => 
-                if let Err(e) = objdump.do_record(&rec) {
-                    println!("parsing error {}", e);
-                },
-            None => break,
+            Record::THEADR{ name } => println!("THEADER {}", name),
+            Record::MODEND{ main, start_address } => objdump.modend(main, start_address)?,
+            Record::LNAMES{ names } => objdump.lnames(&names)?,
+            Record::SEGDEF{ segs } => objdump.segdef(&segs)?,
+            Record::GRPDEF{ name, segs } => objdump.grpdef(name, &segs)?,
+            Record::EXTDEF{ externs } => objdump.extdef(&externs)?,
+            Record::PUBDEF{ group, seg, frame, publics} => objdump.pubdef(group, seg, frame, &publics)?,
+            Record::COMENT{ header, coment } => objdump.coment(header, &coment)?,
+            Record::LEDATA{ seg, offset, data } => objdump.ledata(seg, offset, &data)?,
+            Record::None => break,
+            x => { println!("record {:x?}", x)},
         }
     }
     Ok(())
 } 
-
-
-
 
 fn main() {
     if let Err(err) = objdump() {
