@@ -64,6 +64,65 @@ impl TryFrom<u8> for TargetMethod {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+pub enum FixupLocation {
+    Byte,
+    Word,
+    Selector,
+    LongPointer,
+    LoaderWord,
+    HighOrderByte,
+    Offset32,
+    LoaderOffset32,
+    Pointer48,    
+}
+
+impl TryFrom<u8> for FixupLocation {
+    type Error = ObjError;
+
+    fn try_from(val: u8) -> Result<Self, Self::Error> {
+        match val {
+            0 => Ok(FixupLocation::Byte),
+            1 => Ok(FixupLocation::Word),
+            2 => Ok(FixupLocation::Selector),
+            4 => Ok(FixupLocation::LongPointer),
+            5 => Ok(FixupLocation::LoaderWord),
+            9 => Ok(FixupLocation::Offset32),
+            11 => Ok(FixupLocation::Pointer48),
+            13 => Ok(FixupLocation::LoaderOffset32),
+
+            val => Err(ObjError::new(&format!("invalid fixup location ${:02x}", val))),
+        }
+    }
+}
+
+// NB most enum cases have the data directly embedded, but fixup has enough
+// fields that it's unwieldy
+//
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub struct Fixup {
+    pub is_seg_relative: bool,
+    pub location: FixupLocation,
+    pub data_offset: usize,
+    pub frame_thread: Option<usize>,
+    pub frame_method: Option<FrameMethod>,
+    pub frame_datum: Option<usize>,
+    pub target_thread: Option<usize>,
+    pub target_method: Option<TargetMethod>,
+    pub target_datum: Option<usize>,
+    pub target_displacement: u32,
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub enum FixupSubrecord {
+    TargetThread{ method: TargetMethod, thread: usize, index: usize },
+    FrameThread{ method: FrameMethod, thread: usize, index: Option<usize> },
+    Fixup{ fixup: Fixup }, 
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
 pub struct StartAddress {
     pub fix_data: u8,
     pub frame_datum: Option<usize>,
@@ -289,6 +348,7 @@ pub enum Record {
     COMENT{ header: ComentHeader, coment: Coment },
     LEDATA{ seg: usize, offset: u32, data: Vec<u8> },
     BAKPAT{ seg: usize, location: BakpatLocation, fixups: Vec<BakpatFixup> },
+    FIXUPP{ fixups: Vec<FixupSubrecord >},
 }
 
 pub struct Parser {
@@ -558,6 +618,108 @@ impl Parser {
         Ok(Record::BAKPAT{ seg, location, fixups })
     }
 
+    fn fixupp(&mut self, is32: bool) -> Result<Record, ObjError> {
+        let mut fixups = Vec::new();
+
+        while self.ptr < self.endrec() {
+            let lead = self.next_uint(1)? as u8;
+
+            if (lead & 0x80) == 0x00 {
+                // thread subrecord
+                let thread = (lead & 3) as usize;
+                if (lead & 0x40) == 0x00 {
+                    // target thread
+                    // NB from spec:
+                    //   "For TARGET threads, only the lower two bits of the
+                    //    field are used; the high-order bit of the method is 
+                    //    derived from the P bit in the Fix Data field of FIXUP 
+                    //    subrecords that refer to this thread."
+                    //
+                    let method: TargetMethod = ((lead >> 2) & 3).try_into()?;
+                    let index = self.next_index()?;
+                    fixups.push(FixupSubrecord::TargetThread{ method, thread, index })
+                } else {
+                    // frame thread
+                    let method: FrameMethod = ((lead >> 2) & 7).try_into()?;
+                    let index = if method.has_datum() {
+                        Some(self.next_index()?)
+                    } else {
+                        None
+                    };
+
+                    fixups.push(FixupSubrecord::FrameThread{ method, thread, index })
+                }
+            } else {
+                //
+                // TODO if not seg_relative is entire fixdata section missing?
+                //
+                let is_seg_relative = (lead & 0x40) != 0;
+                let location: FixupLocation = ((lead >> 2) & 0x0f).try_into()?;
+                let low = self.next_uint(1)?;
+                let data_offset = (((lead as usize) & 3) << 8) | low;
+                let fixdata = self.next_uint(1)?;
+
+                let frame_uses_thread = (fixdata & 0x80) != 0;
+                let target_uses_thread = (fixdata & 0x08) != 0;
+
+                let frame_thread = if frame_uses_thread { Some((fixdata >> 4) & 3) } else { None };
+                let target_thread = if target_uses_thread { Some(fixdata & 3) } else { None };
+
+                let frame_method: Option<FrameMethod> = if frame_uses_thread {
+                    None
+                } else {
+                    Some((((fixdata >> 4) & 7) as u8).try_into()?)
+                };
+
+                let target_method: Option<TargetMethod> = if target_uses_thread {
+                    None
+                } else {
+                    Some(((fixdata & 7) as u8).try_into()?)
+                };
+
+                let frame_datum = match &frame_method {
+                    Some(method) => if method.has_datum() {
+                        Some(self.next_index()?)
+                    } else {
+                        None
+                    },
+                    None => None
+                };
+
+                let target_datum = if target_method.is_none() {
+                    None
+                } else {
+                    Some(self.next_index()?)
+                };
+
+                let target_displacement = if (fixdata & 0x04) != 0 {
+                    0
+                } else {
+                    let bytes = if is32 { 4 } else { 2 };
+                    self.next_uint(bytes)? as u32
+                };
+
+                // fixup subrecord
+                let fixup = Fixup{
+                    is_seg_relative,
+                    location,
+                    data_offset,
+                    frame_thread,
+                    frame_method,
+                    frame_datum,
+                    target_thread,
+                    target_method,
+                    target_datum,
+                    target_displacement,
+                };
+
+                fixups.push(FixupSubrecord::Fixup{ fixup });
+            }
+        }
+
+        Ok(Record::FIXUPP{ fixups })
+    }
+
     fn coment_translator(&mut self, header: ComentHeader) -> Result<Record, ObjError> {
         let text = self.rest_str()?;
         Ok(Record::COMENT{
@@ -618,6 +780,8 @@ impl Parser {
             0x98 => self.segdef(false),
             0x99 => self.segdef(true),
             0x9a => self.grpdef(),
+            0x9c => self.fixupp(false),
+            0x9d => self.fixupp(true),
             0xa0 => self.ledata(false),
             0xa1 => self.ledata(true),
             0xb2 => self.bakpat(false),
@@ -1291,5 +1455,218 @@ mod test {
             x => assert!(false, "parser returned {:x?}", x),
         }
     }
-}
 
+    //
+    // FIXUPP
+    //
+    #[test]
+    fn test_fixup_frame_thread_succeeds() {
+        let obj = vec![
+            0x9c, 0x03, 0x00, 
+            0b010_001_01,
+            0x07,
+            0x00
+        ];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::FIXUPP{ fixups }) => {
+                assert_eq!(fixups, vec![
+                    FixupSubrecord::FrameThread{
+                        method: FrameMethod::Grpdef,
+                        thread: 1,
+                        index: Some(7)
+                    }
+                ]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_fixup_frame_thread_no_datum_succeeds() {
+        let obj = vec![
+            0x9c, 0x02, 0x00, 
+            0b010_101_01,
+            0x00
+        ];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::FIXUPP{ fixups }) => {
+                assert_eq!(fixups, vec![
+                    FixupSubrecord::FrameThread{
+                        method: FrameMethod::Target,
+                        thread: 1,
+                        index: None,
+                    }
+                ]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_fixup_target_thread_succeeds() {
+        let obj = vec![
+            0x9c, 0x03, 0x00, 
+            0b000_010_10,
+            0x06,
+            0x00
+        ];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::FIXUPP{ fixups }) => {
+                assert_eq!(fixups, vec![
+                    FixupSubrecord::TargetThread{
+                        method: TargetMethod::Extdef,
+                        thread: 2,
+                        index: 6
+                    }
+                ]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_fixup_succeeds() {
+        let obj = vec![
+            0x9c, 0x08, 0x00, 
+            0b1_1_0001_00, 0x67,
+            0b0_001_0_000,
+            0x01,
+            0x02,
+            0x34, 0x12,
+            0x00
+        ];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::FIXUPP{ fixups }) => {
+                assert_eq!(fixups, vec![
+                    FixupSubrecord::Fixup{
+                        fixup: Fixup {
+                            is_seg_relative: true,
+                            location: FixupLocation::Word,
+                            data_offset: 0x0067,
+                            frame_thread: None,
+                            frame_method: Some(FrameMethod::Grpdef),
+                            frame_datum: Some(1),
+                            target_thread: None,
+                            target_method: Some(TargetMethod::Segdef),
+                            target_datum: Some(2),
+                            target_displacement: 0x1234,
+                        }
+                    }
+                ]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_fixup_using_thread_succeeds() {
+        let obj = vec![
+            0x9c, 0x06, 0x00, 
+            0b1_1_0001_00, 0x67,
+            0b1_001_1_010,
+            0x34, 0x12,
+            0x00
+        ];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::FIXUPP{ fixups }) => {
+                assert_eq!(fixups, vec![
+                    FixupSubrecord::Fixup{
+                        fixup: Fixup {
+                            is_seg_relative: true,
+                            location: FixupLocation::Word,
+                            data_offset: 0x0067,
+                            frame_thread: Some(1),
+                            frame_method: None,
+                            frame_datum: None,
+                            target_thread: Some(2),
+                            target_method: None,
+                            target_datum: None,
+                            target_displacement: 0x1234,
+                        }
+                    }
+                ]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+
+    #[test]
+    fn test_fixup_no_displacement_succeeds() {
+        let obj = vec![
+            0x9c, 0x04, 0x00, 
+            0b1_1_0001_00, 0x67,
+            0b1_001_1_110,
+            0x00
+        ];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::FIXUPP{ fixups }) => {
+                assert_eq!(fixups, vec![
+                    FixupSubrecord::Fixup{
+                        fixup: Fixup {
+                            is_seg_relative: true,
+                            location: FixupLocation::Word,
+                            data_offset: 0x0067,
+                            frame_thread: Some(1),
+                            frame_method: None,
+                            frame_datum: None,
+                            target_thread: Some(2),
+                            target_method: None,
+                            target_datum: None,
+                            target_displacement: 0,
+                        }
+                    }
+                ]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_32_bit_fixup_succeeds() {
+        let obj = vec![
+            0x9d, 0x0a, 0x00, 
+            0b1_1_0001_00, 0x67,
+            0b0_001_0_000,
+            0x01,
+            0x02,
+            0x78, 0x56, 0x34, 0x12,
+            0x00
+        ];
+
+        let mut parser = Parser::new(obj);
+        match parser.next() {
+            Ok(Record::FIXUPP{ fixups }) => {
+                assert_eq!(fixups, vec![
+                    FixupSubrecord::Fixup{
+                        fixup: Fixup {
+                            is_seg_relative: true,
+                            location: FixupLocation::Word,
+                            data_offset: 0x0067,
+                            frame_thread: None,
+                            frame_method: Some(FrameMethod::Grpdef),
+                            frame_datum: Some(1),
+                            target_thread: None,
+                            target_method: Some(TargetMethod::Segdef),
+                            target_datum: Some(2),
+                            target_displacement: 0x12345678,
+                        }
+                    }
+                ]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+}

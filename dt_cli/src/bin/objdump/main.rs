@@ -10,6 +10,7 @@ use crate::args::Args;
 struct Objdump {
     lnames: Vec<String>,
     segments: Vec<Segdef>,
+    groups: Vec<String>,
     externs: Vec<String>,
 }
 
@@ -18,6 +19,7 @@ impl Objdump {
         Objdump {
             lnames: vec!["".to_string()],
             segments: vec![Segdef::empty()],
+            groups: vec!["".to_string()],
             externs: vec!["".to_string()],
         }
     }
@@ -81,13 +83,15 @@ impl Objdump {
         Ok(())
     }
 
-    fn grpdef(&self, name: usize, segs: &Vec<usize>) -> Result<(), AppError> {
+    fn grpdef(&mut self, name: usize, segs: &Vec<usize>) -> Result<(), AppError> {
         println!("GRPDEF {}", self.lname(name));
 
         for segidx in segs.iter() {
             let seg = &self.segments[*segidx];
             println!("      {}", self.segname(seg)); 
         }
+
+        self.groups.push(self.lname(name).to_string());
         Ok(())
     }
 
@@ -189,7 +193,7 @@ impl Objdump {
                 left = PERLINE;
             }
 
-            print!("{:08x}", offset as usize + i);
+            print!("      {:08x}", offset as usize + i);
             
             let mut j = 0;
 
@@ -240,7 +244,82 @@ impl Objdump {
         }
 
         Ok(())
+    }
 
+    fn fixupp(&self, fixups: &[FixupSubrecord]) -> Result<(), AppError> {
+        println!("FIXUPP");
+
+        for fixup in fixups {
+            match fixup {
+                FixupSubrecord::TargetThread{ method, thread, index } => {
+                    print!("      TARGET THREAD {} {:?} ", thread, method);
+                    match method {
+                        TargetMethod::Segdef => print!("{}", self.segname(&self.segments[*index])),
+                        TargetMethod::Grpdef => print!("{}", self.groups[*index]),
+                        TargetMethod::Extdef => print!("{}", self.externs[*index]),
+                        _ => (),
+                    }
+                    println!();
+                },
+                FixupSubrecord::FrameThread{ method, thread, index } => {
+                    print!("      FRAME THREAD {} {:?} ", thread, method);
+                    if let Some(index) = index {
+                        match method {
+                            FrameMethod::Segdef => print!("{}", self.segname(&self.segments[*index])),
+                            FrameMethod::Grpdef => print!("{}", self.groups[*index]),
+                            FrameMethod::Extdef => print!("{}", self.externs[*index]),
+                            _ => (),
+                        }
+                    }
+                    println!();
+                },
+                FixupSubrecord::Fixup{ fixup } => {
+                    print!("      {:08x} {:?} ", fixup.data_offset, fixup.location);
+
+                    if fixup.is_seg_relative {
+                        print!("SEG-REL  ");
+                    } else {
+                        print!("SELF-REL ");
+                    }
+
+                    if let Some(ft) = fixup.frame_thread {
+                        print!("FRAME-THREAD {} ", ft);
+                    }
+
+                    if let Some(fm) = fixup.frame_method.as_ref() {
+                        match fm {
+                            //
+                            // TODO should refactor to put index into FrameMethod enum
+                            //
+                            FrameMethod::Segdef => print!("FRAME SEG {} ", self.segname(&self.segments[fixup.frame_datum.unwrap()])),
+                            FrameMethod::Grpdef => print!("FRAME GROUP {} ", self.groups[fixup.frame_datum.unwrap()]),
+                            FrameMethod::Extdef => print!("FRAME EXTERN {} ", self.externs[fixup.frame_datum.unwrap()]),
+                            FrameMethod::Target => print!("FRAME=TARGET "),
+                            FrameMethod::PreviousDataRecord => print!("FRAME=PREVIOUS-DATA-RECORDS "),
+                        }
+                    }
+
+                    if let Some(tt) = fixup.target_thread {
+                        print!("TARGET-THREAD {} ", tt);
+                    }
+
+                    if let Some(tm) = fixup.target_method.as_ref() {
+                        match tm {
+                            TargetMethod::Extdef | TargetMethod::ExtdefNoDisplacement =>
+                                print!("TARGET EXTERN {} ", self.externs[fixup.target_datum.unwrap()]),
+                            TargetMethod::Segdef | TargetMethod::SegdefNoDisplacement =>
+                                print!("TARGET SEG {} ", self.segname(&self.segments[fixup.target_datum.unwrap()])),
+                            TargetMethod::Grpdef | TargetMethod::GrpdefNoDisplacement =>
+                                print!("TARGET GROUP {} ", self.groups[fixup.target_datum.unwrap()]),
+                        }
+                    }
+
+                    println!("TARGET-DISP {}", fixup.target_displacement);
+                },
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -262,6 +341,7 @@ fn objdump() -> Result<(), AppError> {
             Record::COMENT{ header, coment } => objdump.coment(header, &coment)?,
             Record::LEDATA{ seg, offset, data } => objdump.ledata(seg, offset, &data)?,
             Record::BAKPAT{ seg, location, fixups} => objdump.bakpat(seg, location, &fixups)?,
+            Record::FIXUPP{ fixups} => objdump.fixupp(&fixups)?,
             Record::None => break,
             x => { println!("record {:x?}", x)},
         }
