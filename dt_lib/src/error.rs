@@ -2,8 +2,6 @@ use std::error;
 use std::fmt;
 use std::io;
 
-use crate::record::{CommentClass,RecordType};
-
 #[derive(Debug)]
 pub struct Error {
     pub details: String,
@@ -47,19 +45,6 @@ impl Error {
         }
     }
 
-    pub fn bad_rectype(rectype: RecordType, parser: &str) -> Error {
-        Error {
-            details: format!("invalid record type {:?} for {}", rectype, parser),
-            offset: None,
-        }
-    }
-
-    pub fn bad_comclass(comclass: CommentClass, parser: &str) -> Error {
-        Error {
-            details: format!("invalid comment class {:?} for {}", comclass, parser),
-            offset: None,
-        }
-    }
 }
 
 impl From<io::Error> for Error {
