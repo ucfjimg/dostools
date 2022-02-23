@@ -342,6 +342,7 @@ fn objdump() -> Result<(), AppError> {
             Record::LEDATA{ seg, offset, data } => objdump.ledata(seg, offset, &data)?,
             Record::BAKPAT{ seg, location, fixups} => objdump.bakpat(seg, location, &fixups)?,
             Record::FIXUPP{ fixups} => objdump.fixupp(&fixups)?,
+            Record::LEXTDEF{ externs } => objdump.extdef(&externs)?,
             Record::None => break,
             x => { println!("record {:x?}", x)},
         }

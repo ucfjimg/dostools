@@ -84,7 +84,7 @@ impl TryFrom<u8> for FixupLocation {
             0 => Ok(FixupLocation::Byte),
             1 => Ok(FixupLocation::Word),
             2 => Ok(FixupLocation::Selector),
-            4 => Ok(FixupLocation::LongPointer),
+            3 => Ok(FixupLocation::LongPointer),
             5 => Ok(FixupLocation::LoaderWord),
             9 => Ok(FixupLocation::Offset32),
             11 => Ok(FixupLocation::Pointer48),
@@ -349,6 +349,7 @@ pub enum Record {
     LEDATA{ seg: usize, offset: u32, data: Vec<u8> },
     BAKPAT{ seg: usize, location: BakpatLocation, fixups: Vec<BakpatFixup> },
     FIXUPP{ fixups: Vec<FixupSubrecord >},
+    LEXTDEF{ externs: Vec<Extern> },
 }
 
 pub struct Parser {
@@ -555,7 +556,7 @@ impl Parser {
         Ok(Record::GRPDEF{ name, segs })
     }
 
-    fn extdef(&mut self) -> Result<Record, ObjError> {
+    fn make_externs(&mut self, rec: &dyn Fn(Vec<Extern>) -> Record) -> Result<Record, ObjError> {
         let mut externs = Vec::new();
 
         while self.ptr < self.endrec() {
@@ -565,7 +566,15 @@ impl Parser {
             externs.push(Extern{ name, typeidx });
         }
 
-        Ok(Record::EXTDEF{ externs })
+        Ok(rec(externs))
+    }
+
+    fn extdef(&mut self) -> Result<Record, ObjError> {
+        self.make_externs(&|externs| Record::EXTDEF{ externs })
+    }
+
+    fn lextdef(&mut self) -> Result<Record, ObjError> {
+        self.make_externs(&|externs| Record::LEXTDEF{ externs })
     }
 
     fn pubdef(&mut self, is32: bool) -> Result<Record, ObjError> {
@@ -786,6 +795,8 @@ impl Parser {
             0xa1 => self.ledata(true),
             0xb2 => self.bakpat(false),
             0xb3 => self.bakpat(true),
+            0xb4 => self.lextdef(),
+            0xb5 => self.lextdef(), // NB defined per spec w/ no semantic difference from b4
             rectype => Ok(Record::Unknown{ rectype }),
         }
     }
@@ -1665,6 +1676,33 @@ mod test {
                         }
                     }
                 ]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    //
+    // LEXTDEF
+    //
+    #[test]
+    fn test_lextdef_succeeds() {
+        let obj = vec![
+            0xb4, 0x0b, 0x00,
+            0x03, 0x41, 0x42, 0x43, 0x01,
+            0x03, 0x44, 0x45, 0x46, 0x02,
+            0x00];
+
+        let mut parser = Parser::new(obj);
+
+        match parser.next() {
+            Ok(Record::LEXTDEF{ externs }) => {
+                assert_eq!(
+                    externs,
+                    vec![
+                        Extern{ name: "ABC".to_string(), typeidx: 1},
+                        Extern{ name: "DEF".to_string(), typeidx: 2},
+                    ]
+                );
             },
             x => assert!(false, "parser returned {:x?}", x),
         }
