@@ -327,7 +327,7 @@ impl Objdump {
 fn objdump() -> Result<(), AppError> {
     let args = Args::parse()?;
     let obj = std::fs::read(args.libname)?;
-    let mut obj = Parser::new(obj);
+    let mut obj = Parser::new(&obj);
     let mut objdump = Objdump::new();
 
     loop {

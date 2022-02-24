@@ -352,15 +352,15 @@ pub enum Record {
     LEXTDEF{ externs: Vec<Extern> },
 }
 
-pub struct Parser {
-    obj: Vec<u8>,
+pub struct Parser<'a> {
+    obj: &'a [u8],
     start: usize,
     ptr: usize,
     next: usize,
 }
 
-impl Parser {
-    pub fn new(obj: Vec<u8>) -> Parser {
+impl<'a> Parser<'a> {
+    pub fn new(obj: &'a [u8]) -> Parser<'a> {
         Parser{ obj, start: 0, ptr: 0, next: 0 }
     }
 
@@ -852,7 +852,7 @@ mod test {
     #[test]
     fn test_empty_parser_returns_none() {
         let obj = vec![];
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         let p = parser.next();
         assert!(p.is_ok(), "parser returned error {:x?}", p);
@@ -862,7 +862,7 @@ mod test {
     #[test]
     fn test_truncated_header_returns_error() {
         let obj = vec![0x42, 0x00];
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         let p = parser.next();
         assert!(p.is_err());
@@ -871,7 +871,7 @@ mod test {
     #[test]
     fn test_undefined_rectype_returns_unknown() {
         let obj = vec![0x42, 0x00, 0x00, 0x00];
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         let p = parser.next();
         assert!(p.is_ok(), "parser returned error {:?}", p);
@@ -884,7 +884,7 @@ mod test {
             0x80, 0x0e, 0x00, 0x0c,  0x64, 0x6f, 0x73, 0x5c, 
             0x63, 0x72, 0x74, 0x30,  0x2e, 0x61, 0x73, 0x6d, 
             0xdd];
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         assert!(parser.next().is_err());
     }
@@ -894,7 +894,7 @@ mod test {
         let obj = vec![
             0x80, 0x0e, 0x00, 0x0c,  0x64, 0x6f, 0x73, 0x5c, 
             0xdc];
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         assert!(parser.next().is_err());
     }
@@ -908,7 +908,7 @@ mod test {
             0x80, 0x0e, 0x00, 0x0c,  0x64, 0x6f, 0x73, 0x5c, 
             0x63, 0x72, 0x74, 0x30,  0x2e, 0x61, 0x73, 0x6d, 
             0xdc];
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         match parser.next() {
             Ok(Record::THEADR{ name }) => assert_eq!(name, "dos\\crt0.asm"),
@@ -924,7 +924,7 @@ mod test {
         let obj = vec![
             0x96, 0x09, 0x00, 0x03,  0x41, 0x42, 0x43, 0x03, 
             0x44, 0x45, 0x46, 0x00];
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         match parser.next() {
             Ok(Record::LNAMES{ names }) => {
@@ -946,7 +946,7 @@ mod test {
             0b01001000, 0x34, 0x12, 0x01, 0x02, 0x03,
             0b01100011, 0x00, 0x00, 0x05, 0x06, 0x00,
             0x00];
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         match parser.next() {
             Ok(Record::SEGDEF{ segs }) => {
@@ -982,7 +982,7 @@ mod test {
             0x98, 0x0a, 0x00,
             0b00011000, 0xee, 0xff, 0x73, 0x34, 0x12, 0x01, 0x02, 0x03,
             0x00];
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         match parser.next() {
             Ok(Record::SEGDEF{ segs }) => {
@@ -1013,7 +1013,7 @@ mod test {
             0b00010100, 0xee, 0xff, 0x73, 0x78, 0x56, 0x34, 0x12, 0x01, 0x02, 0x03,
             0b10011010, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03,
             0x00];
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         match parser.next() {
             Ok(Record::SEGDEF{ segs }) => {
@@ -1066,7 +1066,7 @@ mod test {
             0x81, 0x23, 0xff, 0x01, 0xff, 0x02,
             0x00];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         match parser.next() {
             Ok(Record::GRPDEF{ name, segs }) => {
@@ -1088,7 +1088,7 @@ mod test {
             0x03, 0x44, 0x45, 0x46, 0x02,
             0x00];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         match parser.next() {
             Ok(Record::EXTDEF{ externs }) => {
@@ -1116,7 +1116,7 @@ mod test {
             0x02, 0x00, 0x00,
             0xf9];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         match parser.next() {
             Ok(Record::PUBDEF{ group, seg, frame, publics }) => {
@@ -1143,7 +1143,7 @@ mod test {
             0x34, 0x02, 0x00,
             0x00];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         match parser.next() {
             Ok(Record::PUBDEF{ group, seg, frame, publics }) => {
@@ -1170,7 +1170,7 @@ mod test {
             0x78, 0x56, 0x34, 0x02, 0x00,
             0x00];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         match parser.next() {
             Ok(Record::PUBDEF{ group, seg, frame, publics }) => {
@@ -1196,7 +1196,7 @@ mod test {
         let obj = vec![
             0x8a, 0x02, 0x00, 0x01, 0x73];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         match parser.next() {
             Ok(Record::MODEND{ main, start_address }) => {
@@ -1212,7 +1212,7 @@ mod test {
         let obj = vec![
             0x8a, 0x02, 0x00, 0x81, 0x00];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         match parser.next() {
             Ok(Record::MODEND{ main, start_address }) => {
@@ -1230,7 +1230,7 @@ mod test {
             0xc1, 0x00, 0x01, 0x02, 0x34, 0x12, 0x00
         ];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::MODEND{ main, start_address }) => {
                 assert_eq!(main, true);
@@ -1255,7 +1255,7 @@ mod test {
             0xc1, 0x00, 0x01, 0x02, 0x78, 0x56, 0x34, 0x12, 0x00
         ];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::MODEND{ main, start_address }) => {
                 assert_eq!(main, true);
@@ -1284,7 +1284,7 @@ mod test {
             0x41, 0x42, 0x43, 0x44, 0x45, 0x46,
             0x00];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::COMENT{ header, coment }) => {
                 assert!(!header.nopurge());
@@ -1308,7 +1308,7 @@ mod test {
             0x6e, 0x43, 0x56,
             0x00];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::COMENT{ header, coment }) => {
                 assert!(header.nopurge());
@@ -1332,7 +1332,7 @@ mod test {
             0x30, 0x6c,
             0x00];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::COMENT{ header, coment }) => {
                 assert!(header.nopurge());
@@ -1356,7 +1356,7 @@ mod test {
             0x41, 0x43, 0x45,
             0x00];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::COMENT{ header, coment }) => {
                 assert!(!header.nopurge());
@@ -1384,7 +1384,7 @@ mod test {
             0x00
         ];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::LEDATA{ seg, offset, data }) => {
                 assert_eq!(seg, 1);
@@ -1405,7 +1405,7 @@ mod test {
             0x00
         ];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::LEDATA{ seg, offset, data }) => {
                 assert_eq!(seg, 1);
@@ -1430,7 +1430,7 @@ mod test {
             0x00
         ];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::BAKPAT{ seg, location, fixups }) => {
                 assert_eq!(seg, 1);
@@ -1454,7 +1454,7 @@ mod test {
             0x00
         ];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::BAKPAT{ seg, location, fixups }) => {
                 assert_eq!(seg, 1);
@@ -1479,7 +1479,7 @@ mod test {
             0x00
         ];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::FIXUPP{ fixups }) => {
                 assert_eq!(fixups, vec![
@@ -1502,7 +1502,7 @@ mod test {
             0x00
         ];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::FIXUPP{ fixups }) => {
                 assert_eq!(fixups, vec![
@@ -1526,7 +1526,7 @@ mod test {
             0x00
         ];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::FIXUPP{ fixups }) => {
                 assert_eq!(fixups, vec![
@@ -1553,7 +1553,7 @@ mod test {
             0x00
         ];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::FIXUPP{ fixups }) => {
                 assert_eq!(fixups, vec![
@@ -1587,7 +1587,7 @@ mod test {
             0x00
         ];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::FIXUPP{ fixups }) => {
                 assert_eq!(fixups, vec![
@@ -1621,7 +1621,7 @@ mod test {
             0x00
         ];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::FIXUPP{ fixups }) => {
                 assert_eq!(fixups, vec![
@@ -1657,7 +1657,7 @@ mod test {
             0x00
         ];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
         match parser.next() {
             Ok(Record::FIXUPP{ fixups }) => {
                 assert_eq!(fixups, vec![
@@ -1692,7 +1692,7 @@ mod test {
             0x03, 0x44, 0x45, 0x46, 0x02,
             0x00];
 
-        let mut parser = Parser::new(obj);
+        let mut parser = Parser::new(&obj);
 
         match parser.next() {
             Ok(Record::LEXTDEF{ externs }) => {
