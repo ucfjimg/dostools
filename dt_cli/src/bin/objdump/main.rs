@@ -140,19 +140,20 @@ impl Objdump {
         if let Some(sa) = start_address {
             print!("  Start address ");
             if let Some(fmethod) = sa.fmethod()? {
-                print!("{:?}", fmethod);
+                print!("{:?} ", fmethod);
                 if let Some(datum) = sa.frame_datum {
-                    print!(" datum {}", datum);
+                    print!(" datum {} ", datum);
                 }
             }
 
             if let Some(tmethod) = sa.tmethod()? {
-                print!("{:?}", tmethod);
+                print!(" {:?}", tmethod);
                 if let Some(datum) = sa.target_datum {
                     print!(" datum {}", datum);
                 }
             }
         }
+        println!();
 
         Ok(())
     }
