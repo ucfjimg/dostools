@@ -82,6 +82,10 @@ impl<'a> Parser<'a> {
         let dictblocks = Self::uint(&image[7..9]);
         let flags = image[9];
 
+        if dictoffset >= image.len() {
+            return Err(LibError::new("library is corrupt (no or invalid dictionary)"));
+        }
+
         let edict_start = dictoffset + dictblocks * LIB_BLOCK_SIZE;
 
         const EDICT_HEADER_LEN: usize = 5;
@@ -115,7 +119,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    pub fn first_obj(&mut self) -> Result<&[u8], LibError> {
+    pub fn first_obj(&mut self) -> Result<Option<&[u8]>, LibError> {
         self.ptr = self.pagesize;
         let start = self.ptr;
 
@@ -137,11 +141,16 @@ impl<'a> Parser<'a> {
         let end = self.ptr;
         self.ptr = (self.ptr + self.pagesize - 1) & !(self.pagesize - 1);
 
-        Ok(&self.image[start..end])
+        Ok(Some(&self.image[start..end]))
     }
 
-    pub fn next_obj(&mut self) -> Result<&[u8], LibError> {
+    pub fn next_obj(&mut self) -> Result<Option<&[u8]>, LibError> {
         let start = self.ptr;
+
+        println!("next_obj start {} dict {}", start, self.dictoffset);
+        if start >= self.dictoffset {
+            return Ok(None);
+        }
 
         loop {
             let rectype = self.next_uint(1)? as u8;
@@ -161,7 +170,7 @@ impl<'a> Parser<'a> {
         let end = self.ptr;
         self.ptr = (self.ptr + self.pagesize - 1) & !(self.pagesize - 1);
 
-        Ok(&self.image[start..end])
+        Ok(Some(&self.image[start..end]))
     }
 
     fn to_ascii(s: &str) -> Result<&[u8], LibError>
@@ -312,9 +321,13 @@ mod test {
         let bytes = vec![
             0xf0, 
             16-3, 0, 
-            0x00, 0x02, 0x00, 0x00,
+            0x10, 0x00, 0x00, 0x00,
             0x03, 0x00,
-            0x00, 
+            0x00,
+            0, 0, 0,  0, 0, 0,
+            
+            // stub dict
+            0
         ];
 
         assert!(Parser::is_lib(&bytes));
@@ -323,7 +336,7 @@ mod test {
             Err(x) => assert!(false, "parser returned error {}", x),
             Ok(parser) => {
                 assert_eq!(parser.pagesize, 16);
-                assert_eq!(parser.dictoffset, 512);
+                assert_eq!(parser.dictoffset, 0x0010);
                 assert_eq!(parser.dictblocks, 3);
             },
         };
@@ -355,6 +368,19 @@ mod test {
     }
 
     #[test]
+    fn test_parser_fails_if_dictoffset_is_out_of_bounds() {
+        let bytes = [
+            0xf0, 
+            16-3, 0, 
+            0x00, 0x02, 0x00, 0x00,
+            0x03, 0x00,
+            0x00, 
+        ];
+
+        assert!(Parser::new(&bytes).is_err());
+    }
+
+    #[test]
     fn test_first_obj_succeeds() {
         let bytes = vec![
             0xf0, 16-3, 0, 0x30, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -363,7 +389,10 @@ mod test {
             0x00, 0x00, 0x00,
             0x80, 0x05, 0x00, 0x03, 0x44, 0x45, 0x46, 0x00,
             0x8a, 0x02, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00
+            0x00, 0x00, 0x00,
+
+            // stub dict
+            0
         ];
 
         assert!(Parser::is_lib(&bytes));
@@ -376,7 +405,7 @@ mod test {
                 assert_eq!(parser.dictblocks, 3);
 
                 match parser.first_obj() {
-                    Ok(fo) =>assert_eq!(fo, &bytes[16..29]),
+                    Ok(fo) =>assert_eq!(fo, Some(&bytes[16..29])),
                     Err(e) => assert!(false, "parser failed on first object {}", e),
                 }
 
@@ -393,7 +422,10 @@ mod test {
             0x00, 0x00, 0x00,
             0x80, 0x05, 0x00, 0x03, 0x44, 0x45, 0x46, 0x00,
             0x8a, 0x02, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00
+            0x00, 0x00, 0x00,
+
+            // stub dict
+            0
         ];
 
         assert!(Parser::is_lib(&bytes));
@@ -403,7 +435,29 @@ mod test {
         assert!(parser.first_obj().is_ok());
         
         match parser.next_obj() {
-            Ok(no) =>assert_eq!(no, &bytes[32..32+13]),
+            Ok(no) =>assert_eq!(no, Some(&bytes[32..32+13])),
+            Err(e) => assert!(false, "parser failed on first object {}", e),
+        };
+    }
+
+    #[test]
+    fn test_next_obj_succeeds_on_end_of_modules() {
+        let bytes = vec![
+            0xf0, 0x0d, 0x00, 0x20, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x80, 0x05, 0x00, 0x03, 0x41, 0x42, 0x43, 0x00, 0x8a, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            
+            // stub dict
+            0
+        ];
+
+        assert!(Parser::is_lib(&bytes));
+        let parser = Parser::new(&bytes);
+        assert!(parser.is_ok());
+        let mut parser = parser.unwrap();
+        assert!(parser.first_obj().is_ok());
+        
+        match parser.next_obj() {
+            Ok(no) =>assert_eq!(no, None),
             Err(e) => assert!(false, "parser failed on first object {}", e),
         };
     }
