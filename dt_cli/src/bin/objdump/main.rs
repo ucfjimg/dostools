@@ -4,6 +4,7 @@ use std::str;
 
 use dt_lib::error::Error as AppError;
 use dt_lib::objfile::*;
+use dt_lib::libfile;
 
 use crate::args::Args;
 
@@ -324,12 +325,9 @@ impl Objdump {
     }
 }
 
-fn objdump() -> Result<(), AppError> {
-    let args = Args::parse()?;
-    let obj = std::fs::read(args.libname)?;
+fn dump_one_object(obj: &[u8]) -> Result<(), AppError> {
     let mut obj = Parser::new(&obj);
     let mut objdump = Objdump::new();
-
     loop {
         match obj.next()? {
             Record::THEADR{ name } => println!("THEADER {}", name),
@@ -348,6 +346,32 @@ fn objdump() -> Result<(), AppError> {
             x => { println!("record {:x?}", x)},
         }
     }
+
+    Ok(())
+}
+
+fn objdump() -> Result<(), AppError> {
+    let args = Args::parse()?;
+    let obj = std::fs::read(args.libname)?;
+
+    if libfile::Parser::is_lib(&obj) {
+        println!("FILE IS A LIBRARY");
+        let mut lib = libfile::Parser::new(&obj)?;
+        let mut obj = lib.first_obj()?;
+
+        loop {
+            match obj {
+                None => break,
+                Some(obj) => dump_one_object(obj)?,
+            }
+
+            obj = lib.next_obj()?;
+            println!("--------------------");
+        }
+    } else {
+        dump_one_object(&obj)?;
+    }
+
     Ok(())
 } 
 
