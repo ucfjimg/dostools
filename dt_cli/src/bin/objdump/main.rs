@@ -175,6 +175,7 @@ impl Objdump {
             Coment::MemoryModel{ text } => println!("  Memory model '{}'", text),
             Coment::DosSeg => println!("  DOS Segment order"),
             Coment::DefaultLibrary{ name } => println!("  Default library '{}'", name),
+            Coment::Libmod{ name} => println!("  Libmod '{}'", name),
             Coment::User{ text } => println!("  User '{}'", text),
 
             _ => println!("  Unknown comment class {:02x}", header.comclass),

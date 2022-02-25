@@ -311,6 +311,7 @@ pub enum Coment {
     DosSeg,
     NewOMF{ text: String },
     DefaultLibrary{ name: String },
+    Libmod{ name: String },
     User{ text: String },
 }
 
@@ -812,6 +813,16 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn coment_libmod(&mut self, header: ComentHeader) -> Result<Record, ObjError> {
+        // Unlike most other coment strings, libmod is a counted string
+        //
+        let name = self.next_str()?;
+        Ok(Record::COMENT{
+            header,
+            coment: Coment::Libmod{ name }
+        })
+    }
+
     fn coment_user(&mut self, header: ComentHeader) -> Result<Record, ObjError> {
         let text = self.rest_str()?;
         Ok(Record::COMENT{
@@ -832,6 +843,7 @@ impl<'a> Parser<'a> {
             0x9e => Ok(Record::COMENT{ header, coment: Coment::DosSeg }),
             0x9f => self.coment_default_library(header),
             0xa1 => self.coment_new_omf(header),
+            0xa3 => self.coment_libmod(header),
             0xdf => self.coment_user(header),
             _ => Ok(Record::COMENT{ header, coment: Coment::Unknown }), 
         }
@@ -1449,6 +1461,26 @@ mod test {
 
                 match coment {
                     Coment::DefaultLibrary{ name } => assert_eq!(name, "ACE"),
+                    x => assert!(false, "coment parsed was {:?}", x),
+                }
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    pub fn test_coment_libmod_succeeds() {
+        let obj = vec![
+            0x88, 0x09, 0x00,
+            0x00, 0xa3, 
+            0x05, 0x41, 0x42, 0x43, 0x44, 0x45,
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+        match parser.next() {
+            Ok(Record::COMENT{ header: _, coment }) => {
+                match coment {
+                    Coment::Libmod{ name } => assert_eq!(name, "ABCDE"),
                     x => assert!(false, "coment parsed was {:?}", x),
                 }
             },
