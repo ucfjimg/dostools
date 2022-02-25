@@ -151,6 +151,13 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
 
+        // Check: if there is no THEADER here, then we've run into padding 
+        // between the object files and the dictionary
+        //
+        if self.image[start] != 0x80 {
+            return Ok(None);
+        }
+
         loop {
             let rectype = self.next_uint(1)? as u8;
             let reclen = self.next_uint(2)?;
