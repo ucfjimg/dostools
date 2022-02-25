@@ -238,6 +238,15 @@ impl Objdump {
         Ok(())
     }
 
+    fn comdef(&mut self, commons: &[Comdef]) -> Result<(), AppError> {
+        println!("COMDEF");
+        for com in commons.iter() {
+            println!("{:5} {} Type={:02x} Length={}", self.externs.len(), com.name, com.datatype, com.length);
+            self.externs.push(com.name.clone());
+        }
+        Ok(())
+    }
+
     fn bakpat(&self, seg: usize, location: BakpatLocation, fixups: &[BakpatFixup]) -> Result<(), AppError> {
         println!("BAKPAT {} {:?}", self.segname(&self.segments[seg]), location);
 
@@ -341,6 +350,7 @@ fn dump_one_object(obj: &[u8]) -> Result<(), AppError> {
             Record::LEDATA{ seg, offset, data } => objdump.ledata(seg, offset, &data)?,
             Record::BAKPAT{ seg, location, fixups} => objdump.bakpat(seg, location, &fixups)?,
             Record::FIXUPP{ fixups} => objdump.fixupp(&fixups)?,
+            Record::COMDEF{ commons } => objdump.comdef(&commons)?,
             Record::LEXTDEF{ externs } => objdump.extdef(&externs)?,
             Record::None => break,
             x => { println!("record {:x?}", x)},
