@@ -309,8 +309,9 @@ pub enum Coment {
     Translator{ text: String },
     MemoryModel{ text: String },
     DosSeg,
-    NewOMF{ text: String },
     DefaultLibrary{ name: String },
+    LinkPassSeparator,
+    NewOMF{ text: String },
     Libmod{ name: String },
     User{ text: String },
 }
@@ -843,6 +844,7 @@ impl<'a> Parser<'a> {
             0x9e => Ok(Record::COMENT{ header, coment: Coment::DosSeg }),
             0x9f => self.coment_default_library(header),
             0xa1 => self.coment_new_omf(header),
+            0xa2 => Ok(Record::COMENT{ header, coment: Coment::LinkPassSeparator }),
             0xa3 => self.coment_libmod(header),
             0xdf => self.coment_user(header),
             _ => Ok(Record::COMENT{ header, coment: Coment::Unknown }), 
@@ -1394,7 +1396,25 @@ mod test {
                 }
             },
             x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
 
+    #[test]
+    pub fn test_coment_link_pass_sep_succeeds() {
+        let obj = vec![
+            0x88, 0x03, 0x00,
+            0xc0, 0xa2,
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+        match parser.next() {
+            Ok(Record::COMENT{ header, coment }) => {
+                assert!(header.nopurge());
+                assert!(header.nolist());
+
+                assert_eq!(coment, Coment::LinkPassSeparator);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
         }
     }
 
