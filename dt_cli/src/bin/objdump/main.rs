@@ -106,8 +106,12 @@ impl Objdump {
         Ok(())
     }
 
-    fn pubdef(&self, group: Option<usize>, seg: Option<usize>, frame: Option<u16>, publics: &[Public]) -> Result<(), AppError> {
-        println!("PUBDEF");
+    fn pubdef(&self, group: Option<usize>, seg: Option<usize>, frame: Option<u16>, publics: &[Public], local: bool) -> Result<(), AppError> {
+        if local {
+            println!("LPUBDEF");
+        } else {
+            println!("PUBDEF");
+        }
 
         if let Some(group) = group {
             print!(" GRP={}", self.lname(group));
@@ -354,6 +358,19 @@ impl Objdump {
 
         Ok(())
     }
+
+    fn cextdef(&mut self, externs: &[CExtern]) -> Result<(), AppError> {
+        println!("CEXTDEF");
+        
+        for extrn in externs {
+            let name = self.lname(extrn.name).to_string();
+            println!("  {} TypeIndex={}", name, extrn.typeindex);
+            self.externs.push(name);
+        }
+        
+        Ok(())
+    }
+
 }
 
 fn dump_one_object(obj: &[u8]) -> Result<(), AppError> {
@@ -367,7 +384,8 @@ fn dump_one_object(obj: &[u8]) -> Result<(), AppError> {
             Record::SEGDEF{ segs } => objdump.segdef(&segs)?,
             Record::GRPDEF{ name, segs } => objdump.grpdef(name, &segs)?,
             Record::EXTDEF{ externs } => objdump.extdef(&externs)?,
-            Record::PUBDEF{ group, seg, frame, publics} => objdump.pubdef(group, seg, frame, &publics)?,
+            Record::PUBDEF{ group, seg, frame, publics} => objdump.pubdef(group, seg, frame, &publics, false)?,
+            Record::LPUBDEF{ group, seg, frame, publics} => objdump.pubdef(group, seg, frame, &publics, true)?,
             Record::COMENT{ header, coment } => objdump.coment(header, &coment)?,
             Record::LEDATA{ seg, offset, data } => objdump.ledata(seg, offset, &data)?,
             Record::BAKPAT{ seg, location, fixups} => objdump.bakpat(seg, location, &fixups)?,
@@ -375,6 +393,7 @@ fn dump_one_object(obj: &[u8]) -> Result<(), AppError> {
             Record::COMDEF{ commons } => objdump.comdef(&commons)?,
             Record::LEXTDEF{ externs } => objdump.extdef(&externs)?,
             Record::ALIAS{ aliases } => objdump.alias(&aliases)?,
+            Record::CEXTDEF{ externs } => objdump.cextdef(&externs)?,
             Record::None => break,
             x => { println!("record {:x?}", x)},
         }
