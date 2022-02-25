@@ -1,4 +1,4 @@
-use std::cmp::{min,max};
+use std::cmp::{max};
 
 use crate::error::Error as LibError;
 
@@ -147,7 +147,6 @@ impl<'a> Parser<'a> {
     pub fn next_obj(&mut self) -> Result<Option<&[u8]>, LibError> {
         let start = self.ptr;
 
-        println!("next_obj start {} dict {}", start, self.dictoffset);
         if start >= self.dictoffset {
             return Ok(None);
         }

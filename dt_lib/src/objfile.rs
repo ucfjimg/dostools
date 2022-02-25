@@ -278,6 +278,15 @@ pub struct Public {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+pub struct Comdef {
+    pub name: String,
+    pub length: usize,
+    pub datatype: u8,
+    pub typeidx: usize,
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
 pub struct ComentHeader {
     pub comtype: u8,
     pub comclass: u8,
@@ -349,6 +358,7 @@ pub enum Record {
     LEDATA{ seg: usize, offset: u32, data: Vec<u8> },
     BAKPAT{ seg: usize, location: BakpatLocation, fixups: Vec<BakpatFixup> },
     FIXUPP{ fixups: Vec<FixupSubrecord >},
+    COMDEF { commons: Vec<Comdef> },
     LEXTDEF{ externs: Vec<Extern> },
 }
 
@@ -729,6 +739,45 @@ impl<'a> Parser<'a> {
         Ok(Record::FIXUPP{ fixups })
     }
 
+    fn comlength(&mut self) -> Result<usize, ObjError> {
+        let byte = self.next_uint(1)?;
+        if byte <= 0x80 {
+            Ok(byte)
+        } else {
+            match byte {
+                0x81 => Ok(self.next_uint(2)?),
+                0x82 => Ok(self.next_uint(3)?),
+                0x83 => Ok(self.next_uint(4)?),
+                x => return Err(self.err(&format!("invalid encoded length lead byte {:02x}", x))),
+            }
+        }
+    }
+
+    fn comdef(&mut self) -> Result<Record, ObjError> {
+        let mut commons = Vec::new();
+
+        while self.ptr < self.endrec() {
+            let name = self.next_str()?;
+            let typeidx = self.next_index()?;
+            let datatype = self.next_uint(1)? as u8;
+            let mut length = self.comlength()?;
+
+            if datatype == 0x61 {
+                // far length which is the product of length * element size
+                length *= self.comlength()?;
+            }
+            
+            commons.push(Comdef{
+                name,
+                length,
+                datatype,
+                typeidx,
+            });
+        }
+        
+        Ok(Record::COMDEF{ commons })
+    }
+
     fn coment_translator(&mut self, header: ComentHeader) -> Result<Record, ObjError> {
         let text = self.rest_str()?;
         Ok(Record::COMENT{
@@ -793,6 +842,7 @@ impl<'a> Parser<'a> {
             0x9d => self.fixupp(true),
             0xa0 => self.ledata(false),
             0xa1 => self.ledata(true),
+            0xb0 => self.comdef(),
             0xb2 => self.bakpat(false),
             0xb3 => self.bakpat(true),
             0xb4 => self.lextdef(),
@@ -1675,6 +1725,47 @@ mod test {
                             target_displacement: 0x12345678,
                         }
                     }
+                ]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    //
+    // COMDEF
+    //
+    #[test]
+    fn test_comdef_succeeds() {
+        let obj = vec![
+            0xb0, 0x20, 0x00,
+            0x04, 0x5f, 0x66, 0x6f, 0x6f, 0x00, 0x62, 0x02,
+            0x05, 0x5f, 0x66, 0x6f, 0x6f, 0x32, 0x00, 0x62, 0x81, 0x00, 0x80,
+            0x05, 0x5f, 0x66, 0x6f, 0x6f, 0x33, 0x00, 0x61, 0x81, 0x90, 0x01, 0x01,
+            0x99
+        ];
+
+        let mut parser = Parser::new(&obj);
+        match parser.next() {
+            Ok(Record::COMDEF{ commons }) => {
+                assert_eq!(commons, vec![
+                    Comdef{ 
+                        name: "_foo".to_string(),
+                        length: 2,
+                        datatype: 0x62,
+                        typeidx: 0
+                    },
+                    Comdef{ 
+                        name: "_foo2".to_string(),
+                        length: 32768,
+                        datatype: 0x62,
+                        typeidx: 0
+                    },
+                    Comdef{ 
+                        name: "_foo3".to_string(),
+                        length: 400,
+                        datatype: 0x61,
+                        typeidx: 0
+                    },
                 ]);
             },
             x => assert!(false, "parser returned {:x?}", x),
