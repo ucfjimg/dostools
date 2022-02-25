@@ -304,6 +304,13 @@ impl ComentHeader {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+pub struct WeakExtern {
+    pub weak: usize,
+    pub default: usize,
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
 pub enum Coment {
     Unknown,
     Translator{ text: String },
@@ -313,6 +320,7 @@ pub enum Coment {
     LinkPassSeparator,
     NewOMF{ text: String },
     Libmod{ name: String },
+    WeakExtern{ externs: Vec<WeakExtern> },
     User{ text: String },
 }
 
@@ -824,6 +832,23 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn coment_weak_extern(&mut self, header: ComentHeader) -> Result<Record, ObjError> {
+        let mut externs = Vec::new();
+
+        while self.ptr < self.endrec() {
+            let weak = self.next_index()?;
+            let default = self.next_index()?;
+
+            externs.push(WeakExtern{ weak, default });
+        }
+        
+        
+        Ok(Record::COMENT{ 
+            header,
+            coment: Coment::WeakExtern{ externs }
+        })
+    }
+
     fn coment_user(&mut self, header: ComentHeader) -> Result<Record, ObjError> {
         let text = self.rest_str()?;
         Ok(Record::COMENT{
@@ -846,6 +871,7 @@ impl<'a> Parser<'a> {
             0xa1 => self.coment_new_omf(header),
             0xa2 => Ok(Record::COMENT{ header, coment: Coment::LinkPassSeparator }),
             0xa3 => self.coment_libmod(header),
+            0xa8 => self.coment_weak_extern(header),
             0xdf => self.coment_user(header),
             _ => Ok(Record::COMENT{ header, coment: Coment::Unknown }), 
         }
@@ -1501,6 +1527,31 @@ mod test {
             Ok(Record::COMENT{ header: _, coment }) => {
                 match coment {
                     Coment::Libmod{ name } => assert_eq!(name, "ABCDE"),
+                    x => assert!(false, "coment parsed was {:?}", x),
+                }
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+
+    #[test]
+    pub fn test_coment_weak_extern_succeeds() {
+        let obj = vec![
+            0x88, 0x08, 0x00,
+            0x00, 0xa8, 
+            0x01, 0x02, 
+            0x03, 0x81, 0x23,
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+        match parser.next() {
+            Ok(Record::COMENT{ header: _, coment }) => {
+                match coment {
+                    Coment::WeakExtern{ externs } => assert_eq!(externs, vec![
+                        WeakExtern{ weak: 1, default: 2 },
+                        WeakExtern{ weak: 3, default: 0x123 },
+                    ]),
                     x => assert!(false, "coment parsed was {:?}", x),
                 }
             },

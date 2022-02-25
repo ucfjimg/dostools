@@ -159,6 +159,13 @@ impl Objdump {
         Ok(())
     }
 
+    fn coment_weak_extern(&self, externs: &[WeakExtern]) -> Result<(), AppError> {
+        for extrn in externs {
+            println!("  extern {} default {}", self.externs[extrn.weak], self.externs[extrn.default]);
+        }
+        Ok(())
+    }
+
     fn coment(&self, header: ComentHeader, coment: &Coment) -> Result<(), AppError> {
         print!("COMENT");
         if header.nopurge() {
@@ -177,6 +184,7 @@ impl Objdump {
             Coment::DefaultLibrary{ name } => println!("  Default library '{}'", name),
             Coment::Libmod{ name} => println!("  Libmod '{}'", name),
             Coment::LinkPassSeparator => println!("  Link pass separator"),
+            Coment::WeakExtern{ externs } => self.coment_weak_extern(externs)?,
             Coment::User{ text } => println!("  User '{}'", text),
 
             _ => println!("  Unknown comment class {:02x}", header.comclass),
