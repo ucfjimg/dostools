@@ -335,6 +335,16 @@ impl Objdump {
 
         Ok(())
     }
+
+    fn alias(&self, aliases: &[Alias]) -> Result<(), AppError> {
+        println!("ALIAS");
+
+        for alias in aliases {
+            println!("  {} -> {}", alias.alias, alias.substitute);
+        }
+
+        Ok(())
+    }
 }
 
 fn dump_one_object(obj: &[u8]) -> Result<(), AppError> {
@@ -355,6 +365,7 @@ fn dump_one_object(obj: &[u8]) -> Result<(), AppError> {
             Record::FIXUPP{ fixups} => objdump.fixupp(&fixups)?,
             Record::COMDEF{ commons } => objdump.comdef(&commons)?,
             Record::LEXTDEF{ externs } => objdump.extdef(&externs)?,
+            Record::ALIAS{ aliases } => objdump.alias(&aliases)?,
             Record::None => break,
             x => { println!("record {:x?}", x)},
         }

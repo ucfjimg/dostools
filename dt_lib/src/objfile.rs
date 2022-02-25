@@ -346,6 +346,13 @@ pub struct BakpatFixup {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+pub struct Alias {
+    pub alias: String,
+    pub substitute: String,
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
 pub enum Record {
     None,
     Unknown{ rectype: u8 },
@@ -363,6 +370,7 @@ pub enum Record {
     FIXUPP{ fixups: Vec<FixupSubrecord >},
     COMDEF { commons: Vec<Comdef> },
     LEXTDEF{ externs: Vec<Extern> },
+    ALIAS { aliases: Vec<Alias> },
 }
 
 pub struct Parser<'a> {
@@ -588,6 +596,19 @@ impl<'a> Parser<'a> {
 
     fn lextdef(&mut self) -> Result<Record, ObjError> {
         self.make_externs(&|externs| Record::LEXTDEF{ externs })
+    }
+
+    fn alias(&mut self) -> Result<Record, ObjError> {
+        let mut aliases = Vec::new();
+
+        while self.ptr < self.endrec() {
+            let alias = self.next_str()?;
+            let substitute = self.next_str()?;
+
+            aliases.push(Alias{ alias, substitute });
+        }
+
+        Ok(Record::ALIAS{ aliases })
     }
 
     fn pubdef(&mut self, is32: bool) -> Result<Record, ObjError> {
@@ -871,6 +892,7 @@ impl<'a> Parser<'a> {
             0xb3 => self.bakpat(true),
             0xb4 => self.lextdef(),
             0xb5 => self.lextdef(), // NB defined per spec w/ no semantic difference from b4
+            0xc6 => self.alias(),
             rectype => Ok(Record::Unknown{ rectype }),
         }
     }
@@ -1879,6 +1901,35 @@ mod test {
                     vec![
                         Extern{ name: "ABC".to_string(), typeidx: 1},
                         Extern{ name: "DEF".to_string(), typeidx: 2},
+                    ]
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    //
+    // ALIAS
+    //
+    #[test]
+    fn test_alias_succeeds() {
+        let obj = vec![
+            0xc6, 0x11, 0x00,
+            0x03, 0x41, 0x42, 0x43,
+            0x03, 0x44, 0x45, 0x46,
+            0x03, 0x47, 0x48, 0x49,
+            0x03, 0x4a, 0x4b, 0x4c,
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+
+        match parser.next() {
+            Ok(Record::ALIAS{ aliases }) => {
+                assert_eq!(
+                    aliases,
+                    vec![
+                        Alias{ alias: "ABC".to_string(), substitute: "DEF".to_string() },
+                        Alias{ alias: "GHI".to_string(), substitute: "JKL".to_string() },
                     ]
                 );
             },
