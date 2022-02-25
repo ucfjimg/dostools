@@ -308,6 +308,7 @@ pub enum Coment {
     Unknown,
     Translator{ text: String },
     MemoryModel{ text: String },
+    DosSeg,
     NewOMF{ text: String },
     DefaultLibrary{ name: String },
 }
@@ -819,6 +820,7 @@ impl<'a> Parser<'a> {
         match comclass {
             0x00 => self.coment_translator(header),
             0x9d => self.coment_memory_model(header),
+            0x9e => Ok(Record::COMENT{ header, coment: Coment::DosSeg }),
             0x9f => self.coment_default_library(header),
             0xa1 => self.coment_new_omf(header),
             _ => Ok(Record::COMENT{ header, coment: Coment::Unknown }), 
@@ -1390,6 +1392,29 @@ mod test {
 
                 match coment {
                     Coment::MemoryModel{ text } => assert_eq!(text, "0l"),
+                    x => assert!(false, "coment parsed was {:?}", x),
+                }
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+
+        }
+    }
+
+    #[test]
+    pub fn test_coment_dosseg_succeeds() {
+        let obj = vec![
+            0x88, 0x03, 0x00,
+            0x80, 0x9e,
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+        match parser.next() {
+            Ok(Record::COMENT{ header, coment }) => {
+                assert!(header.nopurge());
+                assert!(!header.nolist());
+
+                match coment {
+                    Coment::DosSeg => (),
                     x => assert!(false, "coment parsed was {:?}", x),
                 }
             },

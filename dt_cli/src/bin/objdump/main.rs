@@ -173,6 +173,7 @@ impl Objdump {
             Coment::Translator{ text } => println!("  Translator '{}'", text),
             Coment::NewOMF{ text } => println!("  Debug style '{}'", text),
             Coment::MemoryModel{ text } => println!("  Memory model '{}'", text),
+            Coment::DosSeg => println!("  DOS Segment order"),
             Coment::DefaultLibrary{ name } => println!("  Default library '{}'", name),
 
             _ => println!("  Unknown comment class {:02x}", header.comclass),
