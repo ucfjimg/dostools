@@ -355,6 +355,20 @@ pub struct BakpatFixup {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+pub struct Alias {
+    pub alias: String,
+    pub substitute: String,
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub struct CExtern {
+    pub name: usize,
+    pub typeindex: usize,
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
 pub enum Record {
     None,
     Unknown{ rectype: u8 },
@@ -371,7 +385,10 @@ pub enum Record {
     BAKPAT{ seg: usize, location: BakpatLocation, fixups: Vec<BakpatFixup> },
     FIXUPP{ fixups: Vec<FixupSubrecord >},
     COMDEF { commons: Vec<Comdef> },
+    CEXTDEF { externs: Vec<CExtern> },
     LEXTDEF{ externs: Vec<Extern> },
+    LPUBDEF{ group: Option<usize>, seg: Option<usize>, frame: Option<u16>, publics: Vec<Public> },
+    ALIAS { aliases: Vec<Alias> },
 }
 
 pub struct Parser<'a> {
@@ -599,6 +616,19 @@ impl<'a> Parser<'a> {
         self.make_externs(&|externs| Record::LEXTDEF{ externs })
     }
 
+    fn alias(&mut self) -> Result<Record, ObjError> {
+        let mut aliases = Vec::new();
+
+        while self.ptr < self.endrec() {
+            let alias = self.next_str()?;
+            let substitute = self.next_str()?;
+
+            aliases.push(Alias{ alias, substitute });
+        }
+
+        Ok(Record::ALIAS{ aliases })
+    }
+
     fn pubdef(&mut self, is32: bool) -> Result<Record, ObjError> {
         let group = self.next_opt_index()?;
         let seg = self.next_opt_index()?;
@@ -622,6 +652,31 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Record::PUBDEF{ group, seg, frame, publics })
+    }
+
+    fn lpubdef(&mut self, is32: bool) -> Result<Record, ObjError> {
+        let group = self.next_opt_index()?;
+        let seg = self.next_opt_index()?;
+
+        let frame = if group.is_none() && seg.is_none() {
+            Some(self.next_uint(2)? as u16)
+        } else {
+            None
+        };
+
+        let mut publics = Vec::new();
+
+        let bytes = if is32 { 4 } else { 2 };
+
+        while self.ptr < self.endrec() {
+            let name = self.next_str()?;
+            let offset = self.next_uint(bytes)? as u32;
+            let typeidx = self.next_index()?;
+
+            publics.push(Public{ name, offset, typeidx });
+        }
+
+        Ok(Record::LPUBDEF{ group, seg, frame, publics })
     }
 
     fn ledata(&mut self, is32: bool) -> Result<Record, ObjError> {
@@ -790,6 +845,19 @@ impl<'a> Parser<'a> {
         Ok(Record::COMDEF{ commons })
     }
 
+    fn cextdef(&mut self) -> Result<Record, ObjError> {
+        let mut externs = Vec::new();
+
+        while self.ptr < self.endrec() {
+            let name = self.next_index()?;
+            let typeindex = self.next_index()?;
+
+            externs.push(CExtern{ name, typeindex });
+        }
+
+        Ok(Record::CEXTDEF{ externs })
+    }
+
     fn coment_translator(&mut self, header: ComentHeader) -> Result<Record, ObjError> {
         let text = self.rest_str()?;
         Ok(Record::COMENT{
@@ -899,6 +967,10 @@ impl<'a> Parser<'a> {
             0xb3 => self.bakpat(true),
             0xb4 => self.lextdef(),
             0xb5 => self.lextdef(), // NB defined per spec w/ no semantic difference from b4
+            0xb6 => self.lpubdef(false),
+            0xb7 => self.lpubdef(true),
+            0xbc => self.cextdef(),
+            0xc6 => self.alias(),
             rectype => Ok(Record::Unknown{ rectype }),
         }
     }
@@ -1276,6 +1348,90 @@ mod test {
 
         match parser.next() {
             Ok(Record::PUBDEF{ group, seg, frame, publics }) => {
+                assert_eq!(group, Some(2));
+                assert_eq!(seg, None);
+                assert_eq!(frame, None);
+                assert_eq!(
+                    publics,
+                    vec![
+                        Public{ name: "GAMMA".to_string(), offset: 0x2345678, typeidx: 0},
+                    ]
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    //
+    // LPUBDEF
+    //
+    #[test]
+    fn test_lpubdef_succeeds() {
+        let obj = vec![
+            0xb6, 0x0c, 0x00,
+            0x00, 0x01, 
+            0x05, 0x47, 0x41, 0x4d, 0x4d, 0x41,
+            0x02, 0x00, 0x00,
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+
+        match parser.next() {
+            Ok(Record::LPUBDEF{ group, seg, frame, publics }) => {
+                assert_eq!(group, None);
+                assert_eq!(seg, Some(1));
+                assert_eq!(frame, None);
+                assert_eq!(
+                    publics,
+                    vec![
+                        Public{ name: "GAMMA".to_string(), offset: 2, typeidx: 0},
+                    ]
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_lpubdef_with_frame_succeeds() {
+        let obj = vec![
+            0xb6, 0x0e, 0x00,
+            0x00, 0x00, 0x00, 0xf0, 
+            0x05, 0x47, 0x41, 0x4d, 0x4d, 0x41,
+            0x34, 0x02, 0x00,
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+
+        match parser.next() {
+            Ok(Record::LPUBDEF{ group, seg, frame, publics }) => {
+                assert_eq!(group, None);
+                assert_eq!(seg, None);
+                assert_eq!(frame, Some(0xf000));
+                assert_eq!(
+                    publics,
+                    vec![
+                        Public{ name: "GAMMA".to_string(), offset: 0x234, typeidx: 0},
+                    ]
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_lpubdef_with_32_bit_offset_succeeds() {
+        let obj = vec![
+            0xb7, 0x0e, 0x00,
+            0x02, 0x00, 
+            0x05, 0x47, 0x41, 0x4d, 0x4d, 0x41,
+            0x78, 0x56, 0x34, 0x02, 0x00,
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+
+        match parser.next() {
+            Ok(Record::LPUBDEF{ group, seg, frame, publics }) => {
                 assert_eq!(group, Some(2));
                 assert_eq!(seg, None);
                 assert_eq!(frame, None);
@@ -1950,6 +2106,61 @@ mod test {
                     vec![
                         Extern{ name: "ABC".to_string(), typeidx: 1},
                         Extern{ name: "DEF".to_string(), typeidx: 2},
+                    ]
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    //
+    // ALIAS
+    //
+    #[test]
+    fn test_alias_succeeds() {
+        let obj = vec![
+            0xc6, 0x11, 0x00,
+            0x03, 0x41, 0x42, 0x43,
+            0x03, 0x44, 0x45, 0x46,
+            0x03, 0x47, 0x48, 0x49,
+            0x03, 0x4a, 0x4b, 0x4c,
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+
+        match parser.next() {
+            Ok(Record::ALIAS{ aliases }) => {
+                assert_eq!(
+                    aliases,
+                    vec![
+                        Alias{ alias: "ABC".to_string(), substitute: "DEF".to_string() },
+                        Alias{ alias: "GHI".to_string(), substitute: "JKL".to_string() },
+                    ]
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    //
+    // CEXTDEF
+    //
+    #[test]
+    fn test_cextdef_succeeds() {
+        let obj = vec![
+            0xbc, 0x05, 0x00,
+            0x01, 0x00, 0x02, 0x03,
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+
+        match parser.next() {
+            Ok(Record::CEXTDEF{ externs }) => {
+                assert_eq!(
+                    externs,
+                    vec![
+                        CExtern{ name: 1, typeindex: 0 },
+                        CExtern{ name: 2, typeindex: 3 },
                     ]
                 );
             },
