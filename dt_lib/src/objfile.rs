@@ -369,6 +369,119 @@ pub struct CExtern {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+pub enum ComdatSelection {
+    NoMatch,
+    PickAny,
+    SameSize,
+    ExactMatch,
+}
+
+impl TryFrom<u8> for ComdatSelection {
+    type Error = ObjError;
+
+    fn try_from(val: u8) -> Result<Self, Self::Error> {
+        match val & 0xf0 {
+            0x00 => Ok(ComdatSelection::NoMatch),
+            0x10 => Ok(ComdatSelection::PickAny),
+            0x20 => Ok(ComdatSelection::SameSize),
+            0x30 => Ok(ComdatSelection::ExactMatch),
+
+            val => Err(ObjError::new(&format!("invalid comdat selection ${:02x}", val))),
+        }
+    }
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub enum ComdatAllocation {
+    Explicit,
+    FarCode,
+    FarData,
+    Code32,
+    Data32
+}
+
+impl TryFrom<u8> for ComdatAllocation {
+    type Error = ObjError;
+
+    fn try_from(val: u8) -> Result<Self, Self::Error> {
+        match val & 0x0f {
+            0x00 => Ok(ComdatAllocation::Explicit),
+            0x01 => Ok(ComdatAllocation::FarCode),
+            0x02 => Ok(ComdatAllocation::FarData),
+            0x03 => Ok(ComdatAllocation::Code32),
+            0x04 => Ok(ComdatAllocation::Data32),
+            
+            val => Err(ObjError::new(&format!("invalid comdat allocation ${:02x}", val))),
+        }
+    }
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub enum ComdatAlign {
+    Segdef,
+    Byte,
+    Word,
+    Paragraph,
+    Page,
+    Dword
+}
+
+impl TryFrom<u8> for ComdatAlign {
+    type Error = ObjError;
+
+    fn try_from(val: u8) -> Result<Self, Self::Error> {
+        match val & 0x0f {
+            0x00 => Ok(ComdatAlign::Segdef),
+            0x01 => Ok(ComdatAlign::Byte),
+            0x02 => Ok(ComdatAlign::Word),
+            0x03 => Ok(ComdatAlign::Paragraph),
+            0x04 => Ok(ComdatAlign::Page),
+            0x05 => Ok(ComdatAlign::Dword),
+            
+            val => Err(ObjError::new(&format!("invalid comdat align ${:02x}", val))),
+        }
+    }
+}
+
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub struct Comdat {
+    pub flags: u8,
+    pub selection: ComdatSelection,
+    pub allocation: ComdatAllocation,
+    pub align: ComdatAlign,
+    pub offset: u32,
+    pub typeindex: usize,
+    pub base_group: Option<usize>,
+    pub base_seg: Option<usize>,
+    pub base_frame: Option<u16>,
+    pub name: usize,
+    pub data: Vec<u8>,
+}
+
+impl Comdat {
+    pub fn continuation(&self) -> bool {
+        (self.flags & 0x01) != 0
+    }
+
+    pub fn iterated_data(&self) -> bool {
+        (self.flags & 0x02) != 0
+    }
+
+    pub fn local(&self) -> bool {
+        (self.flags & 0x04) != 0
+    }
+
+    pub fn codeseg(&self) -> bool {
+        (self.flags & 0x08) != 0
+    }
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
 pub enum Record {
     None,
     Unknown{ rectype: u8 },
@@ -389,6 +502,7 @@ pub enum Record {
     LEXTDEF{ externs: Vec<Extern> },
     LPUBDEF{ group: Option<usize>, seg: Option<usize>, frame: Option<u16>, publics: Vec<Public> },
     ALIAS { aliases: Vec<Alias> },
+    COMDAT { comdat: Comdat },
 }
 
 pub struct Parser<'a> {
@@ -858,6 +972,46 @@ impl<'a> Parser<'a> {
         Ok(Record::CEXTDEF{ externs })
     }
 
+    fn comdat(&mut self) -> Result<Record, ObjError> {
+        let flags = self.next_uint(1)? as u8;
+        let attributes = self.next_uint(1)? as u8;
+        let align = self.next_uint(1)? as u8;
+        let offset = self.next_uint(2)? as u32;
+        let typeindex = self.next_index()?;
+        let base_group = self.next_opt_index()?;
+        let base_seg = self.next_opt_index()?;
+
+        let base_frame = if base_group.is_none() && base_seg.is_none() {
+            Some(self.next_uint(2)? as u16)
+        } else {
+            None
+        };
+
+        let name = self.next_index()?;
+
+        let mut data = Vec::new();
+
+        while self.ptr < self.endrec() {
+            data.push(self.next_uint(1)? as u8);
+        }
+
+        Ok(Record::COMDAT{
+            comdat: Comdat {
+                flags,
+                selection: attributes.try_into()?,
+                allocation: attributes.try_into()?,
+                align: align.try_into()?,
+                offset,
+                typeindex,
+                base_group,
+                base_seg,
+                base_frame,
+                name,
+                data,    
+            }
+        })
+    }
+
     fn coment_translator(&mut self, header: ComentHeader) -> Result<Record, ObjError> {
         let text = self.rest_str()?;
         Ok(Record::COMENT{
@@ -970,8 +1124,18 @@ impl<'a> Parser<'a> {
             0xb6 => self.lpubdef(false),
             0xb7 => self.lpubdef(true),
             0xbc => self.cextdef(),
+            0xc2 => self.comdat(),
             0xc6 => self.alias(),
-            rectype => Ok(Record::Unknown{ rectype }),
+            rectype => {
+                print!("UNK {:02x}", rectype);
+                while self.ptr < self.endrec() {
+                    let by = self.next_uint(1)?;
+                    print!(" {:02x}", by);
+                }
+                println!();
+
+                Ok(Record::Unknown{ rectype })
+            },
         }
     }
 
@@ -2167,4 +2331,170 @@ mod test {
             x => assert!(false, "parser returned {:x?}", x),
         }
     }
+
+    //
+    // COMDAT
+    //
+    #[test]
+    fn test_comdat_succeeds() {
+        let obj = vec![
+            0xc2, 0x0c, 0x00,
+            0x01,           // flags 
+            0x10,           // attributs
+            0x00,           // align
+            0x34, 0x12,     // data offset
+            0x01,           // type index
+            0x01,           // base group
+            0x02,           // base segment
+            0x03,           // name
+            0x55, 0x66,     // data
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+
+        match parser.next() {
+            Ok(Record::COMDAT{ comdat }) => {
+                assert_eq!(
+                    comdat,
+                    Comdat {
+                        flags: 0x01,
+                        selection: ComdatSelection::PickAny,
+                        allocation: ComdatAllocation::Explicit,
+                        align: ComdatAlign::Segdef,
+                        offset: 0x1234,
+                        typeindex: 1,
+                        base_group: Some(1),
+                        base_seg: Some(2),
+                        base_frame: None,
+                        name: 3,
+                        data: vec![0x55, 0x66],
+                    }
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_comdat_far_code_succeeds() {
+        let obj = vec![
+            0xc2, 0x0c, 0x00,
+            0x01,           // flags 
+            0x11,           // attributs
+            0x00,           // align
+            0x34, 0x12,     // data offset
+            0x01,           // type index
+            0x01,           // base group
+            0x02,           // base segment
+            0x03,           // name
+            0x55, 0x66,     // data
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+
+        match parser.next() {
+            Ok(Record::COMDAT{ comdat }) => {
+                assert_eq!(
+                    comdat,
+                    Comdat {
+                        flags: 0x01,
+                        selection: ComdatSelection::PickAny,
+                        allocation: ComdatAllocation::FarCode,
+                        align: ComdatAlign::Segdef,
+                        offset: 0x1234,
+                        typeindex: 1,
+                        base_group: None,
+                        base_seg: None,
+                        base_frame: None,
+                        name: 3,
+                        data: vec![0x55, 0x66],
+                    }
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_comdat_frame_succeeds() {
+        let obj = vec![
+            0xc2, 0x0e, 0x00,
+            0x01,           // flags 
+            0x10,           // attributs
+            0x00,           // align
+            0x34, 0x12,     // data offset
+            0x01,           // type index
+            0x00,           // base group
+            0x00,           // base segment
+            0x00, 0xf0,     // base frame
+            0x03,           // name
+            0x55, 0x66,     // data
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+
+        match parser.next() {
+            Ok(Record::COMDAT{ comdat }) => {
+                assert_eq!(
+                    comdat,
+                    Comdat {
+                        flags: 0x01,
+                        selection: ComdatSelection::PickAny,
+                        allocation: ComdatAllocation::Explicit,
+                        align: ComdatAlign::Segdef,
+                        offset: 0x1234,
+                        typeindex: 1,
+                        base_group: None,
+                        base_seg: None,
+                        base_frame: Some(0xf000),
+                        name: 3,
+                        data: vec![0x55, 0x66],
+                    }
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_comdat32_succeeds() {
+        let obj = vec![
+            0xc3, 0x0e, 0x00,
+            0x01,           // flags 
+            0x10,           // attributs
+            0x00,           // align
+            0x78, 0x56, 0x34, 0x12,     // data offset
+            0x01,           // type index
+            0x01,           // base group
+            0x02,           // base segment
+            0x03,           // name
+            0x55, 0x66,     // data
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+
+        match parser.next() {
+            Ok(Record::COMDAT{ comdat }) => {
+                assert_eq!(
+                    comdat,
+                    Comdat {
+                        flags: 0x01,
+                        selection: ComdatSelection::PickAny,
+                        allocation: ComdatAllocation::Explicit,
+                        align: ComdatAlign::Segdef,
+                        offset: 0x12345678,
+                        typeindex: 1,
+                        base_group: Some(1),
+                        base_seg: Some(2),
+                        base_frame: None,
+                        name: 3,
+                        data: vec![0x55, 0x66],
+                    }
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
 }
+

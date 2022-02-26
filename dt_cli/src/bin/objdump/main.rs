@@ -395,7 +395,9 @@ fn dump_one_object(obj: &[u8]) -> Result<(), AppError> {
             Record::ALIAS{ aliases } => objdump.alias(&aliases)?,
             Record::CEXTDEF{ externs } => objdump.cextdef(&externs)?,
             Record::None => break,
-            x => { println!("record {:x?}", x)},
+            x => { 
+                println!("record {:x?}", x)
+            },
         }
     }
 
