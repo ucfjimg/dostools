@@ -495,6 +495,7 @@ pub enum Record {
     PUBDEF{ group: Option<usize>, seg: Option<usize>, frame: Option<u16>, publics: Vec<Public> },
     COMENT{ header: ComentHeader, coment: Coment },
     LEDATA{ seg: usize, offset: u32, data: Vec<u8> },
+    LIDATA{ seg: usize, offset: u32, data: Vec<u8> },
     BAKPAT{ seg: usize, location: BakpatLocation, fixups: Vec<BakpatFixup> },
     FIXUPP{ fixups: Vec<FixupSubrecord >},
     COMDEF { commons: Vec<Comdef> },
@@ -802,6 +803,53 @@ impl<'a> Parser<'a> {
         Ok(Record::LEDATA{ seg, offset, data: data.to_vec() })
     }
 
+    fn build_li_data(out: &mut Vec<u8>, input: &[u8], is32: bool) -> Result<usize, ObjError> {
+        let bytes = if is32 { 4 } else { 2 };
+        if bytes + 2 > input.len() {
+            return Err(ObjError::truncated());
+        }
+
+        let repeat = Self::uint(&input[0..bytes]);
+        let block_count = Self::uint(&input[bytes..bytes+2]);
+        let mut next = bytes + 2;
+        
+        if block_count == 0 {
+            if next == input.len() {
+                return Err(ObjError::truncated());
+            }
+            let count = input[next] as usize;
+            next += 1;
+            if next + count > input.len() {
+                return Err(ObjError::truncated());
+            }
+
+            for _ in 0..repeat {
+                for by in &input[next..next+count] {
+                    out.push(*by);
+                }
+            }
+
+            Ok(next + count)
+        } else {
+            for _ in 0..repeat {
+                next = bytes + 2;
+                for _ in 0..block_count {
+                    next += Self::build_li_data(out, &input[next..], is32)?;
+                }
+            }
+            Ok(next)
+        }
+    }
+
+    fn lidata(&mut self, is32: bool) -> Result<Record, ObjError> {
+        let seg = self.next_index()?;
+        let bytes = if is32 { 4 } else { 2 };
+        let offset = self.next_uint(bytes)? as u32;
+        let mut data = Vec::new();
+        Self::build_li_data(&mut data, &self.obj[self.ptr..self.endrec()], is32)?;
+
+        Ok(Record::LIDATA{ seg, offset, data: data.to_vec() })
+    }
     fn bakpat(&mut self, is32: bool) -> Result<Record, ObjError> {
         let seg = self.next_index()?;
         let location = (self.next_uint(1)? as u8).try_into()?;
@@ -1118,6 +1166,8 @@ impl<'a> Parser<'a> {
             0x9d => self.fixupp(true),
             0xa0 => self.ledata(false),
             0xa1 => self.ledata(true),
+            0xa2 => self.lidata(false),
+            0xa3 => self.lidata(true),
             0xb0 => self.comdef(),
             0xb2 => self.bakpat(false),
             0xb3 => self.bakpat(true),
@@ -2490,5 +2540,65 @@ mod test {
         }
     }
 
+    //
+    // LIDATA
+    //
+    #[test]
+    fn test_lidata_succeeds() {
+        let obj = vec![
+            0xa2, 0x16, 0x00,
+            0x01,           // segment
+            0x34, 0x12,     // offset
+            0x02, 0x00, 0x02, 0x00, 0x03, 0x00, 0x00, 0x00, 0x02, 
+            0x40, 0x41, 0x02, 0x00, 0x00, 0x00, 0x02, 0x50, 0x51,
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+
+        match parser.next() {
+            Ok(Record::LIDATA{ seg, offset, data }) => {
+                assert_eq!(seg, 1);
+                assert_eq!(offset, 0x1234);
+                assert_eq!(data,
+                    vec![
+                        0x40, 0x41, 0x40, 0x41, 0x40, 0x41, 0x50, 0x51, 0x50, 0x51,   
+                        0x40, 0x41, 0x40, 0x41, 0x40, 0x41, 0x50, 0x51, 0x50, 0x51,   
+                    ]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_lidata_32_succeeds() {
+        let obj = vec![
+            0xa3, 0x1e, 0x00,
+            0x01,           // segment
+            0x78, 0x56, 0x34, 0x12,     // offset
+            0x02, 0x00, 0x00, 0x00,     // repeat 2 
+            0x02, 0x00,                 // block 2
+              0x03, 0x00, 0x00, 0x00,   //   repeat 3
+              0x00, 0x00,               //   block 0
+              0x02, 0x40, 0x41,         //   -data-
+              0x02, 0x00, 0x00, 0x00,   //   repeat 2
+              0x00, 0x00,               //   block 0
+              0x02, 0x50, 0x51,         //   -data-
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+
+        match parser.next() {
+            Ok(Record::LIDATA{ seg, offset, data }) => {
+                assert_eq!(seg, 1);
+                assert_eq!(offset, 0x12345678);
+                assert_eq!(data,
+                    vec![
+                        0x40, 0x41, 0x40, 0x41, 0x40, 0x41, 0x50, 0x51, 0x50, 0x51,   
+                        0x40, 0x41, 0x40, 0x41, 0x40, 0x41, 0x50, 0x51, 0x50, 0x51,   
+                    ]);
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
 }
 

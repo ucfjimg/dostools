@@ -274,6 +274,14 @@ impl Objdump {
         Ok(())
     }
 
+    fn lidata(&self, seg: usize, offset: u32, data: &[u8]) -> Result<(), AppError> {
+        let seg = &self.segments[seg];
+        println!("LIDATA {}", self.segname(seg));
+        Self::hexdump(data, offset as usize);
+    
+        Ok(())
+    }
+
     fn comdef(&mut self, commons: &[Comdef]) -> Result<(), AppError> {
         println!("COMDEF");
         for com in commons.iter() {
@@ -448,6 +456,7 @@ fn dump_one_object(obj: &[u8]) -> Result<(), AppError> {
             Record::LPUBDEF{ group, seg, frame, publics} => objdump.pubdef(group, seg, frame, &publics, true)?,
             Record::COMENT{ header, coment } => objdump.coment(header, &coment)?,
             Record::LEDATA{ seg, offset, data } => objdump.ledata(seg, offset, &data)?,
+            Record::LIDATA{ seg, offset, data } => objdump.lidata(seg, offset, &data)?,
             Record::BAKPAT{ seg, location, fixups} => objdump.bakpat(seg, location, &fixups)?,
             Record::FIXUPP{ fixups} => objdump.fixupp(&fixups)?,
             Record::COMDEF{ commons } => objdump.comdef(&commons)?,
