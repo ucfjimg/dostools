@@ -197,10 +197,7 @@ impl Objdump {
         Ok(())
     }
 
-    fn ledata(&self, seg: usize, offset: u32, data: &[u8]) -> Result<(), AppError> {
-        let seg = &self.segments[seg];
-        println!("LEDATA {}", self.segname(seg));
-
+    fn hexdump(data: &[u8], offset: usize) {
         let mut i = 0;
 
         while i < data.len() {
@@ -211,7 +208,7 @@ impl Objdump {
                 left = PERLINE;
             }
 
-            print!("      {:08x}", offset as usize + i);
+            print!("      {:08x}", offset + i);
             
             let mut j = 0;
 
@@ -251,6 +248,13 @@ impl Objdump {
 
             i += left;
         }
+    }
+
+    fn ledata(&self, seg: usize, offset: u32, data: &[u8]) -> Result<(), AppError> {
+        let seg = &self.segments[seg];
+        println!("LEDATA {}", self.segname(seg));
+        Self::hexdump(data, offset as usize);
+    
         Ok(())
     }
 
@@ -371,6 +375,46 @@ impl Objdump {
         Ok(())
     }
 
+    fn comdat(&mut self, comdat: &Comdat) -> Result<(), AppError> {
+        print!("COMDAT '{}'", self.lname(comdat.name));
+        if comdat.continuation() {
+            print!(" Continuation");
+        }
+
+        if comdat.iterated_data() {
+            print!(" Iterated-Data");
+        }
+        
+        if comdat.local() {
+            print!(" Local");
+        }
+        
+        if comdat.codeseg() {
+            print!(" Code-Segment");
+        }
+        println!();
+
+        println!("  Selection {:?}", comdat.selection);
+        println!("  Allocation {:?}", comdat.allocation);
+        println!("  Type Index {}", comdat.typeindex);
+
+        if let Some(group) = comdat.base_group {
+            println!("  Group {}", self.groups[group]);
+        }
+
+        if let Some(seg) = comdat.base_seg {
+            println!("  Segment {}", self.segname(&self.segments[seg]));
+        }
+
+        if let Some(frame) = comdat.base_frame {
+            println!("  Frame {:04x}", frame);
+        }
+
+        Self::hexdump(&comdat.data, comdat.offset as usize);
+        
+        Ok(())
+    }
+
 }
 
 fn dump_one_object(obj: &[u8]) -> Result<(), AppError> {
@@ -394,6 +438,7 @@ fn dump_one_object(obj: &[u8]) -> Result<(), AppError> {
             Record::LEXTDEF{ externs } => objdump.extdef(&externs)?,
             Record::ALIAS{ aliases } => objdump.alias(&aliases)?,
             Record::CEXTDEF{ externs } => objdump.cextdef(&externs)?,
+            Record::COMDAT{ comdat } => objdump.comdat(&comdat)?,
             Record::None => break,
             x => { 
                 println!("record {:x?}", x)
