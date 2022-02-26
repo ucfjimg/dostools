@@ -58,6 +58,22 @@ impl Objdump {
         )
     }
 
+    fn groupname(&self, index: usize) -> &str {
+        if index >= self.groups.len() {
+            "invalid-group"
+        } else {
+            &self.groups[index]
+        }
+    }
+
+    fn externname(&self, index: usize) -> &str {
+        if index >= self.externs.len() {
+            "invalid-extern"
+        } else {
+            &self.externs[index]
+        }
+    }
+
     fn segdef(&mut self, segs: &[Segdef]) -> Result<(), AppError> {
         println!("SEGDEF");
         for seg in segs.iter() {
@@ -110,7 +126,7 @@ impl Objdump {
         println!("PUBDEF");
 
         if let Some(group) = group {
-            print!(" GRP={}", self.lname(group));
+            print!(" GRP={}", self.groupname(group));
         }
 
         if let Some(seg) = seg {
@@ -161,7 +177,7 @@ impl Objdump {
 
     fn coment_weak_extern(&self, externs: &[WeakExtern]) -> Result<(), AppError> {
         for extrn in externs {
-            println!("  extern {} default {}", self.externs[extrn.weak], self.externs[extrn.default]);
+            println!("  extern {} default {}", self.externname(extrn.weak), self.externname(extrn.default));
         }
         Ok(())
     }
@@ -278,8 +294,8 @@ impl Objdump {
                     print!("      TARGET THREAD {} {:?} ", thread, method);
                     match method {
                         TargetMethod::Segdef => print!("{}", self.segname(&self.segments[*index])),
-                        TargetMethod::Grpdef => print!("{}", self.groups[*index]),
-                        TargetMethod::Extdef => print!("{}", self.externs[*index]),
+                        TargetMethod::Grpdef => print!("{}", self.groupname(*index)),
+                        TargetMethod::Extdef => print!("{}", self.externname(*index)),
                         _ => (),
                     }
                     println!();
@@ -289,8 +305,8 @@ impl Objdump {
                     if let Some(index) = index {
                         match method {
                             FrameMethod::Segdef => print!("{}", self.segname(&self.segments[*index])),
-                            FrameMethod::Grpdef => print!("{}", self.groups[*index]),
-                            FrameMethod::Extdef => print!("{}", self.externs[*index]),
+                            FrameMethod::Grpdef => print!("{}", self.groupname(*index)),
+                            FrameMethod::Extdef => print!("{}", self.externname(*index)),
                             _ => (),
                         }
                     }
@@ -315,8 +331,8 @@ impl Objdump {
                             // TODO should refactor to put index into FrameMethod enum
                             //
                             FrameMethod::Segdef => print!("FRAME SEG {} ", self.segname(&self.segments[fixup.frame_datum.unwrap()])),
-                            FrameMethod::Grpdef => print!("FRAME GROUP {} ", self.groups[fixup.frame_datum.unwrap()]),
-                            FrameMethod::Extdef => print!("FRAME EXTERN {} ", self.externs[fixup.frame_datum.unwrap()]),
+                            FrameMethod::Grpdef => print!("FRAME GROUP {} ", self.groupname(fixup.frame_datum.unwrap())),
+                            FrameMethod::Extdef => print!("FRAME EXTERN {} ", self.externname(fixup.frame_datum.unwrap())),
                             FrameMethod::Target => print!("FRAME=TARGET "),
                             FrameMethod::PreviousDataRecord => print!("FRAME=PREVIOUS-DATA-RECORDS "),
                         }
@@ -329,11 +345,11 @@ impl Objdump {
                     if let Some(tm) = fixup.target_method.as_ref() {
                         match tm {
                             TargetMethod::Extdef | TargetMethod::ExtdefNoDisplacement =>
-                                print!("TARGET EXTERN {} ", self.externs[fixup.target_datum.unwrap()]),
+                                print!("TARGET EXTERN {} ", self.externname(fixup.target_datum.unwrap())),
                             TargetMethod::Segdef | TargetMethod::SegdefNoDisplacement =>
                                 print!("TARGET SEG {} ", self.segname(&self.segments[fixup.target_datum.unwrap()])),
                             TargetMethod::Grpdef | TargetMethod::GrpdefNoDisplacement =>
-                                print!("TARGET GROUP {} ", self.groups[fixup.target_datum.unwrap()]),
+                                print!("TARGET GROUP {} ", self.groupname(fixup.target_datum.unwrap())),
                         }
                     }
 
