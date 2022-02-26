@@ -415,7 +415,7 @@ impl Objdump {
         println!("  Type Index {}", comdat.typeindex);
 
         if let Some(group) = comdat.base_group {
-            println!("  Group {}", self.groups[group]);
+            println!("  Group {}", self.groupname(group));
         }
 
         if let Some(seg) = comdat.base_seg {
