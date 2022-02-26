@@ -972,11 +972,13 @@ impl<'a> Parser<'a> {
         Ok(Record::CEXTDEF{ externs })
     }
 
-    fn comdat(&mut self) -> Result<Record, ObjError> {
+    fn comdat(&mut self, is32: bool) -> Result<Record, ObjError> {
         let flags = self.next_uint(1)? as u8;
         let attributes = self.next_uint(1)? as u8;
         let align = self.next_uint(1)? as u8;
-        let offset = self.next_uint(2)? as u32;
+
+        let bytes = if is32 { 4 } else { 2 };
+        let offset = self.next_uint(bytes)? as u32;
         let typeindex = self.next_index()?;
         let base_group = self.next_opt_index()?;
         let base_seg = self.next_opt_index()?;
@@ -1124,7 +1126,8 @@ impl<'a> Parser<'a> {
             0xb6 => self.lpubdef(false),
             0xb7 => self.lpubdef(true),
             0xbc => self.cextdef(),
-            0xc2 => self.comdat(),
+            0xc2 => self.comdat(false),
+            0xc3 => self.comdat(true),
             0xc6 => self.alias(),
             rectype => {
                 print!("UNK {:02x}", rectype);
@@ -2403,8 +2406,8 @@ mod test {
                         align: ComdatAlign::Segdef,
                         offset: 0x1234,
                         typeindex: 1,
-                        base_group: None,
-                        base_seg: None,
+                        base_group: Some(1),
+                        base_seg: Some(2),
                         base_frame: None,
                         name: 3,
                         data: vec![0x55, 0x66],
