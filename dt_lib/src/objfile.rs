@@ -1129,16 +1129,7 @@ impl<'a> Parser<'a> {
             0xc2 => self.comdat(false),
             0xc3 => self.comdat(true),
             0xc6 => self.alias(),
-            rectype => {
-                print!("UNK {:02x}", rectype);
-                while self.ptr < self.endrec() {
-                    let by = self.next_uint(1)?;
-                    print!(" {:02x}", by);
-                }
-                println!();
-
-                Ok(Record::Unknown{ rectype })
-            },
+            rectype => Ok(Record::Unknown{ rectype }),
         }
     }
 
