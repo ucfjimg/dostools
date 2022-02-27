@@ -1041,8 +1041,14 @@ impl<'a> Parser<'a> {
 
         let mut data = Vec::new();
 
-        while self.ptr < self.endrec() {
-            data.push(self.next_uint(1)? as u8);
+        let is_iterated = (flags & 0x02) != 0;
+
+        if is_iterated {
+            Self::build_li_data(&mut data, &self.obj[self.ptr..self.endrec()], is32)?;
+        } else {
+            while self.ptr < self.endrec() {
+                data.push(self.next_uint(1)? as u8);
+            }
         }
 
         Ok(Record::COMDAT{
@@ -2533,6 +2539,101 @@ mod test {
                         base_frame: None,
                         name: 3,
                         data: vec![0x55, 0x66],
+                    }
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+    #[test]
+    fn test_comdat_iterated_succeeds() {
+        let obj = vec![
+            0xc2, 0x1c, 0x00,
+            0x03,           // flags 
+            0x10,           // attributs
+            0x00,           // align
+            0x34, 0x12,     // data offset
+            0x01,           // type index
+            0x01,           // base group
+            0x02,           // base segment
+            0x03,           // name
+            0x02, 0x00, 0x02, 0x00, 0x03, 0x00, 0x00, 0x00, 0x02, 
+            0x40, 0x41, 0x02, 0x00, 0x00, 0x00, 0x02, 0x50, 0x51,
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+
+        match parser.next() {
+            Ok(Record::COMDAT{ comdat }) => {
+                assert_eq!(
+                    comdat,
+                    Comdat {
+                        flags: 0x03,
+                        selection: ComdatSelection::PickAny,
+                        allocation: ComdatAllocation::Explicit,
+                        align: ComdatAlign::Segdef,
+                        offset: 0x1234,
+                        typeindex: 1,
+                        base_group: Some(1),
+                        base_seg: Some(2),
+                        base_frame: None,
+                        name: 3,
+                        data: vec![
+                            0x40, 0x41, 0x40, 0x41, 0x40, 0x41, 0x50, 0x51, 0x50, 0x51,   
+                            0x40, 0x41, 0x40, 0x41, 0x40, 0x41, 0x50, 0x51, 0x50, 0x51,   
+                        ],
+                    }
+                );
+            },
+            x => assert!(false, "parser returned {:x?}", x),
+        }
+    }
+
+
+    #[test]
+    fn test_comdat32_iterated_succeeds() {
+        let obj = vec![
+            0xc3, 0x24, 0x00,
+            0x03,           // flags 
+            0x10,           // attributs
+            0x00,           // align
+            0x78, 0x56, 0x34, 0x12,     // data offset
+            0x01,           // type index
+            0x01,           // base group
+            0x02,           // base segment
+            0x03,           // name
+            0x02, 0x00, 0x00, 0x00,     // repeat 2 
+            0x02, 0x00,                 // block 2
+              0x03, 0x00, 0x00, 0x00,   //   repeat 3
+              0x00, 0x00,               //   block 0
+              0x02, 0x40, 0x41,         //   -data-
+              0x02, 0x00, 0x00, 0x00,   //   repeat 2
+              0x00, 0x00,               //   block 0
+              0x02, 0x50, 0x51,         //   -data-
+            0x00];
+
+        let mut parser = Parser::new(&obj);
+
+        match parser.next() {
+            Ok(Record::COMDAT{ comdat }) => {
+                assert_eq!(
+                    comdat,
+                    Comdat {
+                        flags: 0x03,
+                        selection: ComdatSelection::PickAny,
+                        allocation: ComdatAllocation::Explicit,
+                        align: ComdatAlign::Segdef,
+                        offset: 0x12345678,
+                        typeindex: 1,
+                        base_group: Some(1),
+                        base_seg: Some(2),
+                        base_frame: None,
+                        name: 3,
+                        data: vec![
+                            0x40, 0x41, 0x40, 0x41, 0x40, 0x41, 0x50, 0x51, 0x50, 0x51,   
+                            0x40, 0x41, 0x40, 0x41, 0x40, 0x41, 0x50, 0x51, 0x50, 0x51,   
+                        ],
                     }
                 );
             },
